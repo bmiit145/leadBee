@@ -3,38 +3,38 @@ import { MD3LightTheme, configureFonts } from 'react-native-paper';
 // ─── Core Palette ───
 export const colors = {
   // Primary
-  primary: '#6C63FF',
-  primaryDark: '#5A52D5',
-  primaryLight: '#8B85FF',
+  primary: '#000000',
+  primaryDark: '#000000',
+  primaryLight: '#333333',
 
   // Semantic
-  secondary: '#FF6584',
+  secondary: '#666666',
   success: '#16A34A',
   warning: '#D97706',
   error: '#DC2626',
   info: '#2563EB',
 
   // Surfaces
-  background: '#F4F5F7',
+  background: '#FAFAFA',
   surface: '#FFFFFF',
-  surfaceVariant: '#F0F1F3',
+  surfaceVariant: '#F4F4F5',
 
-  // Text — WCAG AA compliant on #F4F5F7 and #FFFFFF
-  text: '#111827',
-  textSecondary: '#4B5563',
-  textTertiary: '#6B7280',
-  textDisabled: '#9CA3AF',
+  // Text
+  text: '#09090B',
+  textSecondary: '#71717A',
+  textTertiary: '#A1A1AA',
+  textDisabled: '#D4D4D8',
 
   // Borders
-  border: '#D1D5DB',
-  borderLight: '#E5E7EB',
+  border: '#E4E4E7',
+  borderLight: '#F4F4F5',
 
   // Input-specific
-  inputText: '#111827',
-  inputLabel: '#374151',
-  inputPlaceholder: '#9CA3AF',
-  inputBorder: '#D1D5DB',
-  inputBorderFocused: '#6C63FF',
+  inputText: '#09090B',
+  inputLabel: '#27272A',
+  inputPlaceholder: '#A1A1AA',
+  inputBorder: '#E4E4E7',
+  inputBorderFocused: '#000000',
   inputBackground: '#FFFFFF',
 
   // Status
@@ -110,7 +110,7 @@ export const paperTheme = {
     ...MD3LightTheme.colors,
     primary: colors.primary,
     onPrimary: '#FFFFFF',
-    primaryContainer: '#EDE9FE',
+    primaryContainer: '#F4F4F5',
     secondary: colors.secondary,
     background: colors.background,
     surface: colors.surface,
