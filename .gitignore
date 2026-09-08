@@ -28,3 +28,5 @@ dashboard/.vite/
 
 # Local MongoDB data + logs (created by the single-node replica set used in dev)
 .data/
+# Added by code-review-graph
+.code-review-graph/
