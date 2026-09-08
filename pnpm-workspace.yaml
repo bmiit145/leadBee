@@ -1,0 +1,5 @@
+packages:
+  - backend
+  - dashboard
+allowBuilds:
+  esbuild: false
