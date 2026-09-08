@@ -1,0 +1,144 @@
+@import 'tailwindcss';
+
+/**
+ * LeadBee console — a monochrome design system.
+ *
+ * The chrome is strictly greyscale. Status is carried by *weight and fill*
+ * (solid chip = live, outline = dormant, dotted = pending) rather than by hue,
+ * which keeps the interface calm at the density this console runs at and stays
+ * legible to anyone who cannot separate red from green.
+ *
+ * One accent survives: `--danger`, reserved for genuinely destructive state —
+ * a suspended tenant, a delete confirmation. Because it is the only colour in
+ * the entire interface, it does not have to shout to be noticed.
+ */
+
+@theme {
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+:root {
+  color-scheme: light;
+
+  --bg: #ffffff;
+  --surface: #fafafa;
+  --surface-raised: #ffffff;
+  --border: #e5e5e5;
+  --border-strong: #d4d4d4;
+
+  --text: #0a0a0a;
+  --text-muted: #737373;
+  --text-subtle: #a3a3a3;
+  --text-inverse: #fafafa;
+
+  --accent: #0a0a0a;
+  --accent-hover: #262626;
+  --accent-text: #fafafa;
+
+  --danger: #b42318;
+  --danger-surface: #fef3f2;
+  --danger-border: #fecdca;
+
+  --ring: #0a0a0a;
+  --radius: 8px;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow-md: 0 2px 8px rgb(0 0 0 / 0.06), 0 1px 2px rgb(0 0 0 / 0.04);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0a0a0a;
+  --surface: #141414;
+  --surface-raised: #1c1c1c;
+  --border: #262626;
+  --border-strong: #383838;
+
+  --text: #fafafa;
+  --text-muted: #a3a3a3;
+  --text-subtle: #737373;
+  --text-inverse: #0a0a0a;
+
+  --accent: #fafafa;
+  --accent-hover: #e5e5e5;
+  --accent-text: #0a0a0a;
+
+  --danger: #f97066;
+  --danger-surface: #2a1512;
+  --danger-border: #542019;
+
+  --ring: #fafafa;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 2px 8px rgb(0 0 0 / 0.5), 0 1px 2px rgb(0 0 0 / 0.3);
+}
+
+* {
+  border-color: var(--border);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Numbers in tables must line up column-wise, or comparing them means reading
+   them one at a time. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+
+/* A visible focus ring is not optional — this console is operated by keyboard
+   far more than its designers expect. */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+::selection {
+  background: var(--text);
+  color: var(--bg);
+}
+
+/* Scrollbars, restrained to match the greyscale chrome. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 5px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-subtle);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

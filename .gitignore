@@ -1,0 +1,30 @@
+node_modules/
+dist/
+build/
+.env
+.env.*
+!.env.example
+*.log
+npm-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+coverage/
+.vscode/
+.idea/
+
+# Expo / RN
+mobile/.expo/
+mobile/android/
+mobile/ios/
+mobile/*.jks
+mobile/*.keystore
+mobile/google-services.json
+
+# Vite
+dashboard/dist/
+dashboard/.vite/
+*.tsbuildinfo
+
+# Local MongoDB data + logs (created by the single-node replica set used in dev)
+.data/

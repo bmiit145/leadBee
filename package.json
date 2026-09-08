@@ -1,0 +1,20 @@
+{
+  "name": "leadbee",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LeadBee — multi-tenant SaaS lead management platform",
+  "workspaces": [
+    "backend",
+    "dashboard"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev --workspace backend",
+    "dev:dashboard": "npm run dev --workspace dashboard",
+    "build": "npm run build --workspace backend && npm run build --workspace dashboard",
+    "typecheck": "npm run typecheck --workspace backend && npm run typecheck --workspace dashboard",
+    "seed": "npm run seed --workspace backend"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+  }
+}
