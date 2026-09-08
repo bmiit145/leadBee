@@ -47,9 +47,7 @@
     "newPassword": "નવો પાસવર્ડ",
     "confirmNewPassword": "નવો પાસવર્ડ ખાતરી કરો",
     "selectDefaultProject": "ડિફોલ્ટ પ્રોજેક્ટ પસંદ કરો",
-    "noDefaultProjectOption": "ડિફોલ્ટ પ્રોજેક્ટ નહીં",
-    "language": "ભાષા",
-    "languageHint": "એપ્લિકેશનને અંગ્રેજી અને ગુજરાતી વચ્ચે બદલો."
+    "noDefaultProjectOption": "ડિફોલ્ટ પ્રોજેક્ટ નહીં"
   },
   "updates": {
     "title": "એપ અપડેટ",

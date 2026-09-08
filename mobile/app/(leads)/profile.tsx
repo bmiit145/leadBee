@@ -15,7 +15,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../src/stores/auth.store';
 import { authService } from '../../src/services/auth.service';
-import { LanguageToggle } from '../../src/components/LanguageToggle';
 import { colors, spacing, borderRadius } from '../../src/theme';
 
 export default function ProfileScreen() {
@@ -240,23 +239,6 @@ export default function ProfileScreen() {
           >
             {t('profile.saveDefaultProject')}
           </Button>
-        </View>
-
-        {/*
-          The app defaults to Gujarati, so this is the only way back to English.
-          In the product this was ported from the toggle lived in the header of
-          the property screens, none of which came across — leaving the switch
-          unreachable. Profile is its home here: the one screen that is about
-          the user rather than their leads.
-        */}
-        <View style={styles.infoCard}>
-          <View style={styles.languageRow}>
-            <View style={styles.infoContent}>
-              <Text style={styles.sectionTitle}>{t('profile.language')}</Text>
-              <Text style={styles.projectHint}>{t('profile.languageHint')}</Text>
-            </View>
-            <LanguageToggle />
-          </View>
         </View>
 
         {isOrganizer && (
@@ -499,11 +481,6 @@ const styles = StyleSheet.create({
   projectPlaceholder: { color: colors.textSecondary, fontSize: 15 },
   projectHint: { fontSize: 12, color: colors.textSecondary, marginTop: spacing.xs },
   saveProjectButton: { marginTop: spacing.md, borderRadius: borderRadius.lg },
-  languageRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-  },
   infoRow: {
     flexDirection: 'row',
     alignItems: 'center',

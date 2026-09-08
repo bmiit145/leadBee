@@ -47,9 +47,7 @@
     "newPassword": "New Password",
     "confirmNewPassword": "Confirm New Password",
     "selectDefaultProject": "Select Default Project",
-    "noDefaultProjectOption": "No default project",
-    "language": "Language",
-    "languageHint": "Switch the app between English and Gujarati."
+    "noDefaultProjectOption": "No default project"
   },
   "updates": {
     "title": "App Update",
