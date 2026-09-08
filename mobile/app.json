@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "runtimeVersion": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/app-icon.png",
+    "icon": "./assets/leadbee-icon.png",
     "userInterfaceStyle": "automatic",
     "scheme": "leadbee",
     "splash": {
@@ -19,14 +19,14 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.leadbee.app"
+      "bundleIdentifier": "com.spirit.leadbee"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#186F90"
       },
-      "package": "com.leadbee.app",
+      "package": "com.spirit.leadbee",
       "blockedPermissions": [
         "android.permission.SYSTEM_ALERT_WINDOW"
       ]

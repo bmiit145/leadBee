@@ -18,17 +18,21 @@ const DEFAULT_API_BASE_URL =
     ? 'http://10.0.2.2:4000/api/v1'
     : 'http://localhost:4000/api/v1';
 
+/**
+ * An explicitly configured URL is used exactly as written.
+ *
+ * This used to rewrite localhost/127.0.0.1 to 10.0.2.2 on *any* Android, which
+ * is only correct on the emulator — 10.0.2.2 is the emulator's alias for the
+ * host and is unroutable from a real handset. That silently broke every
+ * physical-device setup, including a USB one where `adb reverse tcp:4000` makes
+ * the phone's own localhost the right answer.
+ *
+ * The emulator convenience is kept where it belongs: in the default below,
+ * which applies only when nothing is configured.
+ */
 const resolveApiBaseUrl = (): string => {
   const configuredUrl = process.env.EXPO_PUBLIC_API_URL?.trim();
-  if (!configuredUrl) return DEFAULT_API_BASE_URL;
-
-  if (Platform.OS === 'android') {
-    return configuredUrl
-      .replace('://localhost', '://10.0.2.2')
-      .replace('://127.0.0.1', '://10.0.2.2');
-  }
-
-  return configuredUrl;
+  return configuredUrl || DEFAULT_API_BASE_URL;
 };
 
 export const API_BASE_URL = resolveApiBaseUrl();

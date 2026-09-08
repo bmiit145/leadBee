@@ -6,7 +6,7 @@ import gu from './translations/gu.json';
 
 export const LANGUAGE_STORAGE_KEY = 'app.language';
 export type AppLanguage = 'en' | 'gu';
-const DEFAULT_LANGUAGE: AppLanguage = 'gu';
+const DEFAULT_LANGUAGE: AppLanguage = 'en';
 
 const normalizeLanguage = (value?: string | null): AppLanguage => {
   if (!value) return DEFAULT_LANGUAGE;
