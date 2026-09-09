@@ -6,7 +6,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  Alert,
   Image,
   Modal,
   TouchableOpacity,
@@ -26,6 +25,7 @@ import {
 import { apiErrorMessage } from '../../src/services/api';
 import { loginSchema, LoginFormData } from '../../src/utils/validators';
 import { colors, spacing, borderRadius } from '../../src/theme';
+import { InlineFeedback } from '../../src/components/ui/InlineFeedback';
 
 export default function LoginScreen() {
   const { t } = useTranslation();
@@ -33,6 +33,7 @@ export default function LoginScreen() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   /**
    * Only populated when the API reports this phone belongs to several tenants.
@@ -55,6 +56,7 @@ export default function LoginScreen() {
   const attemptLogin = async (data: LoginFormData, organizationId?: string) => {
     try {
       setLoading(true);
+      setLoginError(null);
       await login(data.phone, data.password, organizationId);
       router.replace('/(leads)');
     } catch (error: any) {
@@ -63,10 +65,7 @@ export default function LoginScreen() {
         setOrgChoices(error.organizations);
         return;
       }
-      Alert.alert(
-        t('login.loginFailed'),
-        apiErrorMessage(error, t('login.loginFailedMessage'))
-      );
+      setLoginError(apiErrorMessage(error, t('login.loginFailedMessage')));
     } finally {
       setLoading(false);
     }
@@ -93,11 +92,12 @@ export default function LoginScreen() {
       >
         <View style={styles.header}>
           <Image
-            source={require('../../assets/logo.png')}
+            source={require('../../assets/leadbee-icon.png')}
             style={styles.logoImage}
             resizeMode="contain"
             accessibilityLabel="LeadBee logo"
           />
+          <Text style={styles.brandName}>LeadBee</Text>
         </View>
 
         <View style={styles.intro}>
@@ -107,6 +107,14 @@ export default function LoginScreen() {
 
         <View style={styles.form}>
           <Text style={styles.formLabel}>SIGN IN TO CONTINUE</Text>
+          {loginError ? (
+            <InlineFeedback
+              tone="error"
+              title={t('login.loginFailed')}
+              message={loginError}
+              onDismiss={() => setLoginError(null)}
+            />
+          ) : null}
 
           <Controller
             control={control}
@@ -116,7 +124,10 @@ export default function LoginScreen() {
                 label={t('login.phoneNumber')}
                 mode="outlined"
                 value={value}
-                onChangeText={onChange}
+                onChangeText={(text) => {
+                  setLoginError(null);
+                  onChange(text);
+                }}
                 onBlur={onBlur}
                 keyboardType="phone-pad"
                 maxLength={15}
@@ -142,7 +153,10 @@ export default function LoginScreen() {
                 label={t('login.password')}
                 mode="outlined"
                 value={value}
-                onChangeText={onChange}
+                onChangeText={(text) => {
+                  setLoginError(null);
+                  onChange(text);
+                }}
                 onBlur={onBlur}
                 secureTextEntry={!showPassword}
                 error={!!errors.password}
@@ -252,11 +266,19 @@ const styles = StyleSheet.create({
   },
   header: {
     alignItems: 'center',
-    marginBottom: spacing.xl,
+    marginBottom: 36,
   },
   logoImage: {
-    width: 126,
-    height: 104,
+    width: 88,
+    height: 88,
+    borderRadius: borderRadius.xl,
+  },
+  brandName: {
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+    marginTop: spacing.sm,
   },
   intro: {
     marginBottom: spacing.xl,

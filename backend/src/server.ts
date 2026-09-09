@@ -3,12 +3,20 @@ import { buildApp } from './app.js';
 import { env } from './config/env.js';
 import { connectDatabase, disconnectDatabase } from './config/database.js';
 import { logger } from './lib/logger.js';
+import { registerModuleManifests } from './entitlements/registry.js';
+import './models/index.js';
 
 async function main(): Promise<void> {
   // The database comes up before the listener, so the process never accepts a
   // request it cannot serve — a readiness probe passing while every query fails
   // is worse than a slower start.
   await connectDatabase();
+
+  // Register this build's capabilities into the catalogue, so a module shipped
+  // in this deploy is immediately available to the plan builder. Idempotent and
+  // safe to run concurrently across instances. Before `listen`, because a
+  // request must never see a half-registered catalogue.
+  await registerModuleManifests();
 
   const app = await buildApp();
   await app.listen({ port: env.PORT, host: env.HOST });

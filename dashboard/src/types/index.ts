@@ -1,14 +1,84 @@
 export type OrgStatus = 'trialing' | 'active' | 'past_due' | 'suspended' | 'cancelled';
-export type Plan = 'trial' | 'starter' | 'growth' | 'enterprise';
 export type OrgTier = 'shared' | 'dedicated';
 export type PlatformRole = 'owner' | 'operator' | 'support';
+
+/**
+ * A plan key is whatever the catalogue says it is.
+ *
+ * Deliberately a bare `string`, not a union. Plans are created by operators at
+ * runtime, so a compile-time union here would be a lie the moment someone adds
+ * one — and it was previously one of the six places a new plan had to be
+ * declared. See docs/adr/0001-entitlement-system.md.
+ */
+export type PlanKey = string;
+
+// ─── Entitlement catalogue ────────────────────────────────────────────────────
+
+export type FeatureKind = 'boolean' | 'limit' | 'config';
+
+/** `-1` means unlimited. `null` means the grant says nothing. */
+export interface FeatureGrant {
+  featureKey: string;
+  enabled: boolean;
+  limit?: number | null;
+  config?: Record<string, unknown> | null;
+}
+
+export interface CatalogFeature {
+  key: string;
+  name: string;
+  description?: string;
+  kind: FeatureKind;
+  defaultLimit: number | null;
+  defaultConfig: Record<string, unknown> | null;
+}
+
+export interface CatalogModule {
+  key: string;
+  name: string;
+  description?: string;
+  sortOrder: number;
+  features: CatalogFeature[];
+}
+
+export type PlanStatus = 'draft' | 'active' | 'grandfathered' | 'retired';
+
+export interface PlanSummary {
+  _id: string;
+  key: PlanKey;
+  version: number;
+  name: string;
+  description?: string;
+  status: PlanStatus;
+  isPublic: boolean;
+  /** Server-owned display rank — replaces the old hardcoded `PLAN_RANK`. */
+  sortOrder: number;
+  trialDays: number;
+  grants: FeatureGrant[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlanUsage {
+  version: number;
+  organizations: number;
+}
+
+export interface AddOn {
+  _id: string;
+  key: string;
+  name: string;
+  description?: string;
+  isActive: boolean;
+  grants: FeatureGrant[];
+}
 
 export interface Organization {
   _id: string;
   name: string;
   slug: string;
   status: OrgStatus;
-  plan: Plan;
+  plan: PlanKey;
   tier: OrgTier;
   limits: {
     maxUsers: number;
@@ -116,3 +186,4 @@ export interface ApiError {
   };
   requestId: string;
 }
+

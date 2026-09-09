@@ -22,7 +22,8 @@ import {
   Tr,
 } from '@/components/ui/primitives';
 import { CreateOrgDialog } from '@/components/orgs/CreateOrgDialog';
-import type { OrgStatus, Plan } from '@/types';
+import type { OrgStatus, PlanKey } from '@/types';
+import { usePlans } from '@/hooks/usePlans';
 
 const PAGE_SIZE = 25;
 
@@ -32,7 +33,10 @@ export function OrganizationsPage() {
   const [createOpen, setCreateOpen] = useState(false);
 
   const status = (searchParams.get('status') as OrgStatus | null) ?? undefined;
-  const plan = (searchParams.get('plan') as Plan | null) ?? undefined;
+  const plan = (searchParams.get('plan') as PlanKey | null) ?? undefined;
+  // Filter options come from the catalogue, so a newly created plan is
+  // filterable without a frontend deploy.
+  const { plans } = usePlans();
   const sort = (searchParams.get('sort') as OrgListParams['sort']) ?? 'newest';
   const page = Number(searchParams.get('page') ?? 1);
   const urlSearch = searchParams.get('search') ?? '';
@@ -140,10 +144,11 @@ export function OrganizationsPage() {
             className="w-auto"
           >
             <option value="">All plans</option>
-            <option value="trial">Trial</option>
-            <option value="starter">Starter</option>
-            <option value="growth">Growth</option>
-            <option value="enterprise">Enterprise</option>
+            {plans.map((p) => (
+              <option key={p.key} value={p.key}>
+                {p.name}
+              </option>
+            ))}
           </Select>
 
           <Select
@@ -200,7 +205,11 @@ export function OrganizationsPage() {
                         <StatusChip status={org.status} />
                       </Td>
                       <Td>
-                        <PlanChip plan={org.plan} />
+                        <PlanChip
+                        plan={org.plan}
+                        label={plans.find((p) => p.key === org.plan)?.name}
+                        sortOrder={plans.find((p) => p.key === org.plan)?.sortOrder}
+                      />
                       </Td>
                       <Td className="tabular text-right">
                         {formatNumber(org.usage.users)}

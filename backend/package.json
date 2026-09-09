@@ -9,7 +9,10 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "seed": "tsx src/scripts/seed.ts",
+    "seed:catalog": "tsx src/scripts/seedCatalog.ts",
     "sync-indexes": "tsx src/scripts/syncIndexes.ts",
     "init-rs": "tsx src/scripts/initReplicaSet.ts",
     "routes": "tsx src/scripts/routeTree.ts",
@@ -44,6 +47,7 @@
     "@types/node": "^22.20.1",
     "pino-pretty": "^13.1.3",
     "tsx": "^4.23.13",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
   }
 }

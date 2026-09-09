@@ -1,12 +1,18 @@
 import { api } from './api';
 import type {
+  AddOn,
   ApiList,
   ApiSingle,
   AuditEntry,
+  CatalogModule,
+  FeatureGrant,
   Organization,
   OrganizationDetail,
   OrgStatus,
-  Plan,
+  PlanKey,
+  PlanStatus,
+  PlanSummary,
+  PlanUsage,
   PlatformAdmin,
   PlatformMetrics,
   TenantUser,
@@ -16,9 +22,19 @@ export interface OrgListParams {
   page?: number;
   limit?: number;
   status?: OrgStatus;
-  plan?: Plan;
+  plan?: PlanKey;
   search?: string;
   sort?: 'newest' | 'oldest' | 'name' | 'users' | 'leads';
+}
+
+export interface PlanPayload {
+  name: string;
+  description?: string;
+  status?: PlanStatus;
+  isPublic?: boolean;
+  sortOrder?: number;
+  trialDays?: number;
+  grants: FeatureGrant[];
 }
 
 export const platformService = {
@@ -76,7 +92,7 @@ export const platformService = {
     ownerPhone: string;
     ownerEmail: string;
     ownerPassword: string;
-    plan?: Plan;
+    plan?: PlanKey;
     status?: OrgStatus;
   }) {
     const { data } = await api.post<
@@ -93,7 +109,7 @@ export const platformService = {
     return data.data;
   },
 
-  async setOrganizationPlan(id: string, plan: Plan) {
+  async setOrganizationPlan(id: string, plan: PlanKey) {
     const { data } = await api.patch<ApiSingle<Organization>>(
       `/organizations/${id}/plan`,
       { plan }
@@ -130,6 +146,68 @@ export const platformService = {
     const { data } = await api.get<ApiList<AuditEntry>>('/audit', { params });
     return data;
   },
+
+  // ─── Entitlement catalogue ──────────────────────────────────────────────────
+  // The plan builder renders whatever `/catalog` returns, so a module shipped in
+  // a backend release gains its checkboxes with no change here.
+
+  async catalog() {
+    const { data } = await api.get<ApiSingle<CatalogModule[]>>('/catalog');
+    return data.data;
+  },
+
+  async listPlans(allVersions = false) {
+    const { data } = await api.get<ApiSingle<PlanSummary[]>>('/plans', {
+      params: allVersions ? { allVersions: true } : {},
+    });
+    return data.data;
+  },
+
+  async getPlan(key: string, version?: number) {
+    const { data } = await api.get<ApiSingle<{ plan: PlanSummary; usage: PlanUsage[] }>>(
+      `/plans/${key}`,
+      { params: version ? { version } : {} }
+    );
+    return data.data;
+  },
+
+  async createPlan(payload: PlanPayload & { key: string }) {
+    const { data } = await api.post<ApiSingle<PlanSummary>>('/plans', payload);
+    return data.data;
+  },
+
+  /** Publishes version + 1. Existing subscribers stay on the version they hold. */
+  async publishPlanRevision(key: string, payload: PlanPayload) {
+    const { data } = await api.post<ApiSingle<PlanSummary>>(
+      `/plans/${key}/revisions`,
+      payload
+    );
+    return data.data;
+  },
+
+  async setPlanStatus(key: string, version: number, status: PlanStatus) {
+    const { data } = await api.patch<ApiSingle<PlanSummary>>(
+      `/plans/${key}/versions/${version}/status`,
+      { status }
+    );
+    return data.data;
+  },
+
+  async listAddOns() {
+    const { data } = await api.get<ApiSingle<AddOn[]>>('/addons');
+    return data.data;
+  },
+
+  async setOrganizationEntitlements(
+    id: string,
+    payload: { addOnKeys?: string[]; overrides?: FeatureGrant[] }
+  ) {
+    const { data } = await api.patch<ApiSingle<Organization>>(
+      `/organizations/${id}/entitlements`,
+      payload
+    );
+    return data.data;
+  },
 };
 
 /**
@@ -147,4 +225,8 @@ export const queryKeys = {
   organizationUsers: (id: string, page: number) =>
     ['platform', 'organization', id, 'users', page] as const,
   audit: (params: Record<string, unknown>) => ['platform', 'audit', params] as const,
+  catalog: ['platform', 'catalog'] as const,
+  plans: (allVersions = false) => ['platform', 'plans', allVersions] as const,
+  plan: (key: string, version?: number) => ['platform', 'plan', key, version] as const,
+  addOns: ['platform', 'addons'] as const,
 };

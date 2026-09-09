@@ -1,5 +1,5 @@
 import { cn } from '@/lib/utils';
-import type { OrgStatus, Plan } from '@/types';
+import type { OrgStatus, PlanKey } from '@/types';
 
 /**
  * Status, encoded by **fill and weight** rather than by hue.
@@ -56,29 +56,37 @@ export function StatusChip({
 
 /**
  * Plan tier, shown as filled rungs rather than a coloured label — the shape
- * carries the ordering (trial ▸ starter ▸ growth ▸ enterprise) without needing
- * the reader to know which colour outranks which.
+ * carries the ordering without needing the reader to know which colour outranks
+ * which.
+ *
+ * Rank and label are **server-provided**. They used to be hardcoded tables here,
+ * which meant the client decided which plan outranked which — commercial policy
+ * living in a chip component, and two of the six places a new plan had to be
+ * declared. The catalogue owns both now; this renders whatever it is given.
+ *
+ * `rungs` is capped rather than assumed to be four, so a catalogue with seven
+ * plans does not silently render every one of them as full.
  */
-const PLAN_RANK: Record<Plan, number> = {
-  trial: 1,
-  starter: 2,
-  growth: 3,
-  enterprise: 4,
-};
+const RUNGS = 4;
 
-const PLAN_LABELS: Record<Plan, string> = {
-  trial: 'Trial',
-  starter: 'Starter',
-  growth: 'Growth',
-  enterprise: 'Enterprise',
-};
-
-export function PlanChip({ plan, className }: { plan: Plan; className?: string }) {
-  const rank = PLAN_RANK[plan] ?? 0;
+export function PlanChip({
+  plan,
+  label,
+  sortOrder,
+  className,
+}: {
+  plan: PlanKey;
+  /** Display name from the catalogue. Falls back to the raw key. */
+  label?: string;
+  /** Catalogue rank. Absent while the catalogue loads — renders no rungs. */
+  sortOrder?: number;
+  className?: string;
+}) {
+  const rank = Math.min(Math.max(sortOrder ?? 0, 0), RUNGS);
   return (
     <span className={cn('inline-flex items-center gap-1.5', className)}>
       <span className="flex gap-[2px]" aria-hidden>
-        {[1, 2, 3, 4].map((step) => (
+        {Array.from({ length: RUNGS }, (_, i) => i + 1).map((step) => (
           <span
             key={step}
             className={cn(
@@ -88,7 +96,7 @@ export function PlanChip({ plan, className }: { plan: Plan; className?: string }
           />
         ))}
       </span>
-      <span className="text-[13px] text-[var(--text)]">{PLAN_LABELS[plan] ?? plan}</span>
+      <span className="text-[13px] text-[var(--text)]">{label ?? plan}</span>
     </span>
   );
 }

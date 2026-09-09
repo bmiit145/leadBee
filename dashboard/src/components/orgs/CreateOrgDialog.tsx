@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -7,7 +7,8 @@ import { platformService } from '@/services/platform.service';
 import { errorMessage } from '@/services/api';
 import { Button } from '@/components/ui/Button';
 import { Field, Input, Select } from '@/components/ui/primitives';
-import type { Plan } from '@/types';
+import type { PlanKey } from '@/types';
+import { useAssignablePlans } from '@/hooks/usePlans';
 
 interface FormState {
   organizationName: string;
@@ -16,7 +17,7 @@ interface FormState {
   ownerPhone: string;
   ownerEmail: string;
   ownerPassword: string;
-  plan: Plan;
+  plan: PlanKey;
 }
 
 const EMPTY: FormState = {
@@ -26,7 +27,9 @@ const EMPTY: FormState = {
   ownerPhone: '',
   ownerEmail: '',
   ownerPassword: '',
-  plan: 'starter',
+  // Filled from the catalogue once it loads — there is no longer a plan key
+  // this component can assume exists.
+  plan: '',
 };
 
 /** `Acme Realty Pvt. Ltd.` → `acme-realty-pvt-ltd`, mirroring the server. */
@@ -51,6 +54,18 @@ export function CreateOrgDialog({
   const [slugTouched, setSlugTouched] = useState(false);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+
+  const { plans, isLoading: plansLoading } = useAssignablePlans();
+  const selectedPlan = plans.find((p) => p.key === form.plan);
+
+  // Default to the first assignable plan once the catalogue arrives. Done as an
+  // effect rather than in `EMPTY` because there is no plan key the client can
+  // assume exists — that assumption was the old hardcoded 'starter'.
+  useEffect(() => {
+    if (!form.plan && plans.length > 0) {
+      setForm((prev) => (prev.plan ? prev : { ...prev, plan: plans[0]!.key }));
+    }
+  }, [plans, form.plan]);
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -204,16 +219,27 @@ export function CreateOrgDialog({
             />
           </Field>
 
-          <Field label="Plan" htmlFor="plan">
+          <Field
+            label="Plan"
+            htmlFor="plan"
+            hint={
+              selectedPlan?.trialDays
+                ? `Includes a ${selectedPlan.trialDays}-day trial.`
+                : undefined
+            }
+          >
             <Select
               id="plan"
               value={form.plan}
-              onChange={(e) => update('plan', e.target.value as Plan)}
+              disabled={plansLoading}
+              onChange={(e) => update('plan', e.target.value as PlanKey)}
             >
-              <option value="trial">Trial</option>
-              <option value="starter">Starter</option>
-              <option value="growth">Growth</option>
-              <option value="enterprise">Enterprise</option>
+              {plansLoading && <option value="">Loading plans…</option>}
+              {plans.map((p) => (
+                <option key={p.key} value={p.key}>
+                  {p.name}
+                </option>
+              ))}
             </Select>
           </Field>
         </div>

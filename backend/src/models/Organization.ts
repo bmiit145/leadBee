@@ -7,9 +7,10 @@ import {
   PLANS,
   type OrgStatus,
   type OrgTier,
-  type Plan,
 } from '../config/constants.js';
 import { jsonTransform } from '../lib/toJSON.js';
+import { grantSchema } from './grantSchema.js';
+import type { EffectiveEntitlements, FeatureGrant } from '../entitlements/types.js';
 
 /**
  * The tenant root.
@@ -24,16 +25,45 @@ export interface IOrganization extends Document {
   /** URL-safe tenant handle, unique across the platform. */
   slug: string;
   status: OrgStatus;
-  plan: Plan;
+  /**
+   * Commercial label, mirrored from `subscription.planKey`.
+   *
+   * **No business logic may branch on this.** It exists for invoices, admin
+   * screens and the plan filter. Capability questions go through
+   * `hasFeature()` / `getLimit()` — see ADR-0001.
+   *
+   * Deliberately *not* a Mongoose `enum`: an enum here made a plan created at
+   * runtime unsaveable, which is what forced a redeploy for every new plan.
+   * Validation against the catalogue lives in the plan-change service.
+   */
+  plan: string;
   tier: OrgTier;
 
+  /** What this tenant was sold. Pinned, so editing a plan cannot silently
+   *  rewrite an active customer's terms. */
+  subscription: {
+    planKey: string;
+    /** Pinned version. Changed only by an explicit migration. */
+    planVersion: number;
+    addOnKeys: string[];
+    /** Absolute per-tenant overrides — the enterprise escape hatch that avoids
+     *  inventing a bespoke plan. */
+    overrides: FeatureGrant[];
+  };
+
+  /** Resolved entitlements, snapshotted. Read by every request; never resolved
+   *  on the request path. See ADR-0001. */
+  entitlements?: EffectiveEntitlements | null;
+
   /** Denormalised plan ceilings, copied on plan change so a limit check is a
-   *  field read rather than a lookup. Re-synced by the plan-change service. */
+   *  field read rather than a lookup. Kept in step by the resolver's legacy
+   *  mirror while callers migrate to `getLimit()`. */
   limits: {
     maxUsers: number;
     maxLeads: number;
     maxMonthlyApiCalls: number;
   };
+  /** Legacy mirror of enabled capabilities. Superseded by `entitlements`. */
   features: string[];
 
   /** Rolling counters, maintained on create/delete so the console does not have
@@ -84,10 +114,12 @@ const organizationSchema = new Schema<IOrganization>(
       default: ORG_STATUSES.TRIALING,
       index: true,
     },
+    // No `enum` — see the interface comment. The catalogue is the authority.
     plan: {
       type: String,
-      enum: Object.values(PLANS),
       default: PLANS.TRIAL,
+      trim: true,
+      lowercase: true,
       index: true,
     },
     tier: {
@@ -95,6 +127,18 @@ const organizationSchema = new Schema<IOrganization>(
       enum: Object.values(ORG_TIERS),
       default: ORG_TIERS.SHARED,
     },
+
+    subscription: {
+      planKey: { type: String, default: PLANS.TRIAL, trim: true, lowercase: true },
+      planVersion: { type: Number, default: 1, min: 1 },
+      addOnKeys: { type: [String], default: [] },
+      overrides: { type: [grantSchema], default: [] },
+    },
+
+    // Mixed: the snapshot is written whole by the resolver and read whole by
+    // the entitlement API. Nothing queries inside it, so a strict sub-schema
+    // would buy validation of data this process just produced.
+    entitlements: { type: Schema.Types.Mixed, default: null },
 
     limits: {
       maxUsers: { type: Number, default: PLAN_LIMITS.trial.maxUsers },

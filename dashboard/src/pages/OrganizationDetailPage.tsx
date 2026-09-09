@@ -25,7 +25,8 @@ import {
   Textarea,
 } from '@/components/ui/primitives';
 import { SuspendDialog } from '@/components/orgs/SuspendDialog';
-import type { Plan } from '@/types';
+import type { PlanKey } from '@/types';
+import { planLabel, useAssignablePlans, usePlans } from '@/hooks/usePlans';
 
 export function OrganizationDetailPage() {
   const { id = '' } = useParams();
@@ -63,8 +64,11 @@ export function OrganizationDetailPage() {
     onError: (error) => toast.error(errorMessage(error)),
   });
 
+  const { plans: allPlans } = usePlans();
+  const { plans: assignablePlans } = useAssignablePlans();
+
   const changePlan = useMutation({
-    mutationFn: (plan: Plan) => platformService.setOrganizationPlan(id, plan),
+    mutationFn: (plan: PlanKey) => platformService.setOrganizationPlan(id, plan),
     onSuccess: (org) => {
       toast.success(`Moved to the ${org.plan} plan`);
       invalidateOrg();
@@ -181,17 +185,30 @@ export function OrganizationDetailPage() {
                 <Select
                   value={org.plan}
                   disabled={changePlan.isPending}
-                  onChange={(e) => changePlan.mutate(e.target.value as Plan)}
+                  onChange={(e) => changePlan.mutate(e.target.value as PlanKey)}
                   className="w-auto"
                   aria-label="Change plan"
                 >
-                  <option value="trial">Trial</option>
-                  <option value="starter">Starter</option>
-                  <option value="growth">Growth</option>
-                  <option value="enterprise">Enterprise</option>
+                  {/* The tenant's current plan is listed even when it is no
+                      longer assignable, so a grandfathered account does not
+                      render an empty select. */}
+                  {!assignablePlans.some((p) => p.key === org.plan) && (
+                    <option value={org.plan}>{planLabel(allPlans, org.plan)}</option>
+                  )}
+                  {assignablePlans.map((p) => (
+                    <option key={p.key} value={p.key}>
+                      {p.name}
+                    </option>
+                  ))}
                 </Select>
               ) : (
-                org && <PlanChip plan={org.plan} />
+                org && (
+                  <PlanChip
+                    plan={org.plan}
+                    label={planLabel(allPlans, org.plan)}
+                    sortOrder={allPlans.find((p) => p.key === org.plan)?.sortOrder}
+                  />
+                )
               )}
             </Fact>
 

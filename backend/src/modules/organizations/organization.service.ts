@@ -10,12 +10,16 @@ import {
   DEFAULT_ROLE_PERMISSIONS,
   ORG_STATUSES,
   PLANS,
-  PLAN_LIMITS,
   ROLES,
   ROLE_ORDER,
-  type Plan,
 } from '../../config/constants.js';
-import { env } from '../../config/env.js';
+import { resolveEntitlements } from '../../entitlements/resolver.js';
+import {
+  applySubscription,
+  latestAssignablePlan,
+} from '../../entitlements/subscription.service.js';
+import { assertWithinLimit, UNLIMITED } from '../../entitlements/index.js';
+import type { FeatureGrant } from '../../entitlements/types.js';
 
 export interface ProvisionInput {
   organizationName: string;
@@ -24,7 +28,8 @@ export interface ProvisionInput {
   ownerPhone: string;
   ownerEmail?: string;
   ownerPassword: string;
-  plan?: Plan;
+  /** Catalogue plan key. Validated against the catalogue, not a compiled list. */
+  plan?: string;
   source: 'self_serve' | 'platform_provisioned';
   provisionedBy?: Types.ObjectId;
   /** Platform-provisioned orgs can start active rather than trialing. */
@@ -84,28 +89,28 @@ export const organizationService = {
    * tenant over-limit — the customer should be told to remove users first, not
    * discover it the next time someone tries to log in.
    */
-  async changePlan(organizationId: Types.ObjectId, plan: Plan): Promise<IOrganization> {
+  async changePlan(
+    organizationId: Types.ObjectId,
+    planKey: string
+  ): Promise<IOrganization> {
     const organization = await Organization.findById(organizationId);
     if (!organization) throw AppError.notFound('Organization not found');
 
-    const limits = PLAN_LIMITS[plan];
-    if (limits.maxUsers !== -1 && organization.usage.users > limits.maxUsers) {
+    // Resolve onto the document first, then validate. A throw below leaves the
+    // mutation unsaved and the tenant on exactly the terms they had.
+    await applySubscription(organization, { planKey });
+
+    const seatLimit = organization.limits.maxUsers;
+    if (seatLimit !== UNLIMITED && organization.usage.users > seatLimit) {
       throw AppError.conflict(
-        `This organization has ${organization.usage.users} users; the ${plan} plan allows ${limits.maxUsers}. ` +
+        `This organization has ${organization.usage.users} users; the ${planKey} plan allows ${seatLimit}. ` +
           'Deactivate users before downgrading.',
-        { currentUsers: organization.usage.users, planMaxUsers: limits.maxUsers }
+        { currentUsers: organization.usage.users, planMaxUsers: seatLimit }
       );
     }
 
-    organization.plan = plan;
-    organization.limits = {
-      maxUsers: limits.maxUsers,
-      maxLeads: limits.maxLeads,
-      maxMonthlyApiCalls: limits.maxMonthlyApiCalls,
-    };
-    organization.features = [...limits.features];
     // A paid plan ends the trial clock.
-    if (plan !== PLANS.TRIAL && organization.status === ORG_STATUSES.TRIALING) {
+    if (planKey !== PLANS.TRIAL && organization.status === ORG_STATUSES.TRIALING) {
       organization.status = ORG_STATUSES.ACTIVE;
       organization.trialEndsAt = undefined;
     }
@@ -115,24 +120,12 @@ export const organizationService = {
 
   /** Ceiling check before creating a user. */
   async assertCanAddUser(organization: IOrganization): Promise<void> {
-    if (organization.limits.maxUsers === -1) return;
-    if (organization.usage.users >= organization.limits.maxUsers) {
-      throw AppError.planLimit(
-        `The ${organization.plan} plan allows ${organization.limits.maxUsers} users. Upgrade to add more.`,
-        { limit: organization.limits.maxUsers, current: organization.usage.users }
-      );
-    }
+    assertSeatOrRecordLimit(organization, 'identity.users.max', 'maxUsers', 'users');
   },
 
   /** Ceiling check before creating a lead. */
   async assertCanAddLead(organization: IOrganization): Promise<void> {
-    if (organization.limits.maxLeads === -1) return;
-    if (organization.usage.leads >= organization.limits.maxLeads) {
-      throw AppError.planLimit(
-        `The ${organization.plan} plan allows ${organization.limits.maxLeads} leads. Upgrade to add more.`,
-        { limit: organization.limits.maxLeads, current: organization.usage.leads }
-      );
-    }
+    assertSeatOrRecordLimit(organization, 'crm.leads.max', 'maxLeads', 'leads');
   },
 
   async isSlugAvailable(slug: string): Promise<boolean> {
@@ -146,27 +139,81 @@ export const organizationService = {
 
 // ─── Provisioning internals ───────────────────────────────────────────────────
 
-/** The organization document fields, derived from the plan and the input. */
-function organizationFields(input: ProvisionInput, slug: string) {
-  const plan = input.plan ?? PLANS.TRIAL;
-  const limits = PLAN_LIMITS[plan];
+/**
+ * Ceiling check, preferring the entitlement snapshot and falling back to the
+ * legacy mirror.
+ *
+ * The fallback is transitional and deliberate. An organization provisioned
+ * before the entitlement system carries no snapshot, and reading that as
+ * "denied" would stop an existing customer adding a user — a regression, not a
+ * safe default. The mirror holds that tenant's real, previously-correct
+ * ceiling, so falling back to it is never "unlimited by default".
+ *
+ * Removed once every organization is backfilled. See
+ * docs/adr/0001-entitlement-system.md.
+ */
+function assertSeatOrRecordLimit(
+  organization: IOrganization,
+  featureKey: string,
+  legacyLimitKey: 'maxUsers' | 'maxLeads',
+  label: 'users' | 'leads'
+): void {
+  const current =
+    label === 'users' ? organization.usage.users : organization.usage.leads;
+
+  if (organization.entitlements) {
+    assertWithinLimit(organization, featureKey, current, label);
+    return;
+  }
+
+  const limit = organization.limits[legacyLimitKey];
+  if (limit === UNLIMITED) return;
+  if (current >= limit) {
+    throw AppError.planLimit(
+      `The ${organization.plan} plan allows ${limit} ${label}. Upgrade to add more.`,
+      { limit, current }
+    );
+  }
+}
+
+/**
+ * The organization document fields, derived from the catalogue and the input.
+ *
+ * Async now: the plan and its entitlements come from the database rather than a
+ * compiled table, so the ceilings a new tenant gets are whatever the admin
+ * console currently says they are.
+ */
+async function organizationFields(input: ProvisionInput, slug: string) {
+  const planKey = input.plan ?? PLANS.TRIAL;
+  const plan = await latestAssignablePlan(planKey);
   const status = input.status ?? ORG_STATUSES.TRIALING;
+
+  const subscription = {
+    planKey,
+    planVersion: plan.version,
+    addOnKeys: [] as string[],
+    overrides: [] as FeatureGrant[],
+  };
+  const { entitlements, legacy } = await resolveEntitlements(subscription);
+
+  // Trial length comes from the plan, not from a global environment variable —
+  // it is a commercial term, and different plans and campaigns need different
+  // ones. `0` means the plan grants no trial.
+  const trialEndsAt =
+    status === ORG_STATUSES.TRIALING && plan.trialDays > 0
+      ? new Date(Date.now() + plan.trialDays * 24 * 60 * 60 * 1000)
+      : undefined;
 
   return {
     name: input.organizationName.trim(),
     slug,
     status,
-    plan,
-    limits: {
-      maxUsers: limits.maxUsers,
-      maxLeads: limits.maxLeads,
-      maxMonthlyApiCalls: limits.maxMonthlyApiCalls,
-    },
-    features: [...limits.features],
-    trialEndsAt:
-      status === ORG_STATUSES.TRIALING
-        ? new Date(Date.now() + env.TRIAL_DAYS * 24 * 60 * 60 * 1000)
-        : undefined,
+    plan: planKey,
+    subscription,
+    entitlements,
+    limits: legacy.limits,
+    features: legacy.features,
+    trialEndsAt,
     billingEmail: input.ownerEmail,
     contactPhone: input.ownerPhone,
     signupSource: input.source,
@@ -202,15 +249,17 @@ async function provisionTransactionally(
   input: ProvisionInput,
   slug: string
 ): Promise<ProvisionResult> {
+  // Resolved before the session opens: it reads the platform catalogue, which
+  // is unrelated to the documents in this transaction, and doing it inside
+  // would hold the transaction open across reads that cannot fail it.
+  const fields = await organizationFields(input, slug);
+
   const session = await mongoose.startSession();
   try {
     let result: ProvisionResult | undefined;
 
     await session.withTransaction(async () => {
-      const [organization] = await Organization.create(
-        [organizationFields(input, slug)],
-        { session }
-      );
+      const [organization] = await Organization.create([fields], { session });
 
       result = await runInTenantScope(
         {
@@ -275,7 +324,7 @@ async function provisionWithCompensation(
   input: ProvisionInput,
   slug: string
 ): Promise<ProvisionResult> {
-  const organization = await Organization.create(organizationFields(input, slug));
+  const organization = await Organization.create(await organizationFields(input, slug));
 
   try {
     return await runInTenantScope(

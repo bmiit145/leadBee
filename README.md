@@ -82,6 +82,13 @@ Full detail, including the path to sharding and per-tenant databases, is in
 [docs/MULTI-TENANCY.md](./docs/MULTI-TENANCY.md). Architecture is in
 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
 
+## Engineering standards
+
+Binding rules for contributors, cited by ID in review — start at
+[docs/standards/](./docs/standards/README.md). Per-surface rules live beside the
+code they govern: [backend/RULES.md](./backend/RULES.md),
+[dashboard/RULES.md](./dashboard/RULES.md), [mobile/RULES.md](./mobile/RULES.md).
+
 ## Two authentication realms
 
 Deliberately separate — different secrets **and** different token audiences, so

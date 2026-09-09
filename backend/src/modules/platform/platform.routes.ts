@@ -16,12 +16,21 @@ import {
   paginationQuery,
 } from '../../lib/schemas.js';
 import { message, ok, paginated } from '../../lib/response.js';
-import { ORG_STATUSES, PLANS, type OrgStatus, type Plan } from '../../config/constants.js';
+import { ORG_STATUSES, type OrgStatus } from '../../config/constants.js';
 
 const security = [{ platformToken: [] }];
 
 const statusEnum = z.enum(Object.values(ORG_STATUSES) as [string, ...string[]]);
-const planEnum = z.enum(Object.values(PLANS) as [string, ...string[]]);
+// Plan keys are validated against the catalogue by the service, not against a
+// compiled list. An enum here would reject any plan an admin created at
+// runtime, which is exactly the coupling ADR-0001 removes.
+const planKeySchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(1)
+  .max(50)
+  .regex(/^[a-z0-9][a-z0-9_-]*$/, 'Invalid plan key');
 
 export async function platformRoutes(app: FastifyInstance): Promise<void> {
   const r = app.withTypeProvider<ZodTypeProvider>();
@@ -181,7 +190,7 @@ export async function platformRoutes(app: FastifyInstance): Promise<void> {
         security,
         querystring: paginationQuery.extend({
           status: statusEnum.optional(),
-          plan: planEnum.optional(),
+          plan: planKeySchema.optional(),
           search: z.string().trim().optional(),
           sort: z.enum(['newest', 'oldest', 'name', 'users', 'leads']).optional(),
         }),
@@ -213,7 +222,7 @@ export async function platformRoutes(app: FastifyInstance): Promise<void> {
           ownerPhone: z.string().trim().min(6).max(20),
           ownerEmail: z.string().email(),
           ownerPassword: z.string().min(8),
-          plan: planEnum.optional(),
+          plan: planKeySchema.optional(),
           status: statusEnum.optional(),
         }),
         response: { 201: okEnvelope, ...commonErrors },
@@ -229,7 +238,7 @@ export async function platformRoutes(app: FastifyInstance): Promise<void> {
           ownerPhone: body.ownerPhone,
           ownerEmail: body.ownerEmail,
           ownerPassword: body.ownerPassword,
-          plan: body.plan as Plan | undefined,
+          plan: body.plan,
           status: body.status as OrgStatus | undefined,
           source: 'platform_provisioned',
           provisionedBy: admin._id,
@@ -304,7 +313,7 @@ export async function platformRoutes(app: FastifyInstance): Promise<void> {
         summary: 'Change a tenant’s plan and limits',
         security,
         params: idParam,
-        body: z.object({ plan: planEnum }),
+        body: z.object({ plan: planKeySchema }),
         response: { 200: okEnvelope, ...commonErrors },
       },
       handler: async (request) => {
@@ -313,7 +322,7 @@ export async function platformRoutes(app: FastifyInstance): Promise<void> {
 
         const organization = await organizationService.changePlan(
           before._id,
-          request.body.plan as Plan
+          request.body.plan
         );
 
         await recordPlatformAction({
@@ -422,3 +431,4 @@ export async function platformRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 }
+

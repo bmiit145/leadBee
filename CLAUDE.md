@@ -1,3 +1,35 @@
+# LeadBee
+
+Multi-tenant SaaS lead-management platform. Three surfaces, one API:
+`backend/` (Fastify + Mongoose), `dashboard/` (React — superadmin control
+plane), `mobile/` (Expo — tenant users).
+
+## Engineering standards — read before changing code
+
+These are binding rules, cited by ID in review. **Read the ones that cover the
+surface you are touching.**
+
+| Document | Covers |
+| --- | --- |
+| [docs/standards/README.md](./docs/standards/README.md) | Index, rule IDs, severity, exception process |
+| [docs/standards/ARCHITECTURE-RULES.md](./docs/standards/ARCHITECTURE-RULES.md) | `ARCH-*` — tenancy, auth realms, layering. Never break these |
+| [docs/standards/ENGINEERING-STANDARDS.md](./docs/standards/ENGINEERING-STANDARDS.md) | `ENG-*` — typing, errors, logging, testing, review, Definition of Done |
+| [docs/standards/CONFIGURATION-AND-PLANS.md](./docs/standards/CONFIGURATION-AND-PLANS.md) | `CFG-*` — static vs dynamic config, plan/entitlement model |
+| [backend/RULES.md](./backend/RULES.md) | `BE-*` |
+| [dashboard/RULES.md](./dashboard/RULES.md) | `DASH-*` |
+| [mobile/RULES.md](./mobile/RULES.md) | `MOB-*` |
+
+The four invariants that are never negotiable:
+
+1. `organizationId` comes from the verified JWT — never from client input.
+2. Tenant isolation lives in the data layer, and absent scope **throws**.
+3. Tenant and platform are separate realms: different secrets *and* audiences.
+4. Anything a non-engineer would change is **data**, not a TypeScript union.
+
+Rules are labelled **Enforced** (code complies; regressions block) or
+**Target** (the standard we are moving to; new code complies). Do not assume a
+rule describes current behaviour — check the label.
+
 <!-- code-review-graph MCP tools -->
 ## MCP Tools: code-review-graph
 

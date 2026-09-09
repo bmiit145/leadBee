@@ -8,6 +8,13 @@
 
 // Platform realm — not tenant-scoped.
 export { Organization, type IOrganization } from './Organization.js';
+
+// Entitlement catalogue — platform-level, shared by every tenant. See
+// docs/adr/0001-entitlement-system.md.
+export { CatalogModule, type ICatalogModule } from './CatalogModule.js';
+export { FeatureDefinition, type IFeatureDefinition } from './FeatureDefinition.js';
+export { Plan, PLAN_STATUSES, ASSIGNABLE_PLAN_STATUSES, type IPlan, type PlanStatus } from './Plan.js';
+export { AddOn, type IAddOn } from './AddOn.js';
 export { PlatformAdmin, PLATFORM_ROLE_PERMISSIONS, type IPlatformAdmin, type PlatformRole } from './PlatformAdmin.js';
 export { PlatformAuditLog, type IPlatformAuditLog } from './PlatformAuditLog.js';
 export { Counter, type ICounter } from './Counter.js';

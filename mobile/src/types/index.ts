@@ -17,7 +17,17 @@ export interface ProjectRef {
 export const ADMIN_ROLES: UserRole[] = ['owner', 'admin', 'manager'];
 
 export type OrgStatus = 'trialing' | 'active' | 'past_due' | 'suspended' | 'cancelled';
-export type Plan = 'trial' | 'starter' | 'growth' | 'enterprise';
+/**
+ * A plan key is whatever the catalogue says it is.
+ *
+ * Deliberately a bare `string`, not a union: plans are created by operators at
+ * runtime, so a compile-time union here would be wrong the moment one is added —
+ * and it was one of the six places a new plan used to have to be declared.
+ *
+ * The app must never branch on this. Capability questions are answered by
+ * `features`, which the server resolves. See docs/adr/0001-entitlement-system.md.
+ */
+export type Plan = string;
 
 /**
  * The tenant this session belongs to.
