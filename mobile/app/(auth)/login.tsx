@@ -10,6 +10,7 @@ import {
   Image,
   Modal,
   TouchableOpacity,
+  StatusBar,
 } from 'react-native';
 import { TextInput, Button } from 'react-native-paper';
 import { useRouter } from 'expo-router';
@@ -85,22 +86,27 @@ export default function LoginScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.header}>
-          <Image 
-            source={require('../../assets/logo.png')} 
-            style={styles.logoImage} 
-            resizeMode="contain" 
+          <Image
+            source={require('../../assets/logo.png')}
+            style={styles.logoImage}
+            resizeMode="contain"
+            accessibilityLabel="LeadBee logo"
           />
-          <Text style={styles.subtitle}>{t('common.appName')}</Text>
+        </View>
+
+        <View style={styles.intro}>
+          <Text style={styles.title}>{t('login.welcomeBack')}</Text>
+          <Text style={styles.description}>{t('login.subtitle')}</Text>
         </View>
 
         <View style={styles.form}>
-          <Text style={styles.title}>{t('login.welcomeBack')}</Text>
-          <Text style={styles.description}>{t('login.subtitle')}</Text>
+          <Text style={styles.formLabel}>SIGN IN TO CONTINUE</Text>
 
           <Controller
             control={control}
@@ -116,10 +122,11 @@ export default function LoginScreen() {
                 maxLength={15}
                 error={!!errors.phone}
                 style={styles.input}
+                contentStyle={styles.inputContent}
                 textColor={colors.inputText}
                 outlineColor={colors.inputBorder}
                 activeOutlineColor={colors.inputBorderFocused}
-                left={<TextInput.Icon icon="phone" />}
+                left={<TextInput.Icon icon="phone-outline" color={colors.textSecondary} />}
               />
             )}
           />
@@ -140,14 +147,16 @@ export default function LoginScreen() {
                 secureTextEntry={!showPassword}
                 error={!!errors.password}
                 style={styles.input}
+                contentStyle={styles.inputContent}
                 textColor={colors.inputText}
                 outlineColor={colors.inputBorder}
                 activeOutlineColor={colors.inputBorderFocused}
-                left={<TextInput.Icon icon="lock" />}
+                left={<TextInput.Icon icon="lock-outline" color={colors.textSecondary} />}
                 right={
                   <TextInput.Icon
                     icon={showPassword ? 'eye-off' : 'eye'}
                     onPress={() => setShowPassword(!showPassword)}
+                    color={colors.textSecondary}
                   />
                 }
               />
@@ -169,7 +178,14 @@ export default function LoginScreen() {
           >
             {loading ? t('login.signingIn') : t('login.signIn')}
           </Button>
+
+          <View style={styles.securityNote}>
+            <Ionicons name="shield-checkmark-outline" size={15} color={colors.textSecondary} />
+            <Text style={styles.securityText}>Your workspace data is protected.</Text>
+          </View>
         </View>
+
+        <Text style={styles.footer}>Lead management, without the noise.</Text>
       </ScrollView>
 
       {/* Organization picker — only reached when one phone number is registered
@@ -231,47 +247,52 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
-    padding: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xl,
   },
   header: {
     alignItems: 'center',
-    marginBottom: spacing.xxl,
+    marginBottom: spacing.xl,
   },
   logoImage: {
-    width: 200,
-    height: 120,
-    marginBottom: spacing.xs,
+    width: 126,
+    height: 104,
   },
-  subtitle: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    marginTop: spacing.xs,
+  intro: {
+    marginBottom: spacing.xl,
   },
   form: {
     backgroundColor: colors.surface,
-    borderRadius: 16,
+    borderRadius: borderRadius.lg,
     padding: spacing.lg,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  formLabel: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    marginBottom: spacing.md,
   },
   title: {
-    fontSize: 24,
-    fontWeight: '700',
+    fontSize: 32,
+    lineHeight: 38,
+    fontWeight: '800',
+    letterSpacing: -0.8,
     color: colors.text,
-    marginBottom: 4,
+    marginBottom: spacing.sm,
   },
   description: {
-    fontSize: 14,
+    fontSize: 15,
+    lineHeight: 22,
     color: colors.textSecondary,
-    marginBottom: spacing.lg,
   },
   input: {
-    marginBottom: spacing.xs,
+    marginBottom: spacing.sm,
     backgroundColor: colors.surface,
   },
+  inputContent: { height: 54 },
   errorText: {
     color: colors.error,
     fontSize: 12,
@@ -280,14 +301,32 @@ const styles = StyleSheet.create({
   },
   button: {
     marginTop: spacing.md,
-    borderRadius: 12,
+    borderRadius: borderRadius.md,
   },
   buttonContent: {
-    height: 52,
+    height: 54,
   },
   buttonLabel: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0.1,
+  },
+  securityNote: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: spacing.lg,
+  },
+  securityText: {
+    marginLeft: 6,
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  footer: {
+    color: colors.textTertiary,
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: spacing.xl,
   },
   modalBackdrop: {
     flex: 1,

@@ -30,3 +30,6 @@ dashboard/.vite/
 .data/
 # Added by code-review-graph
 .code-review-graph/
+
+# Local device captures and visual-design references
+.design-references/
