@@ -2,9 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const connectMock = vi.fn();
 const closeMock = vi.fn();
+const listeners = new Map<string, (...args: any[]) => void>();
 const connection = {
   readyState: 0,
-  on: vi.fn(),
+  on: vi.fn((event: string, listener: (...args: any[]) => void) => {
+    listeners.set(event, listener);
+  }),
   close: closeMock,
 };
 
@@ -36,7 +39,9 @@ vi.mock('../../lib/logger.js', () => ({
 
 describe('DatabaseManager', () => {
   beforeEach(() => {
+    vi.resetModules();
     vi.clearAllMocks();
+    listeners.clear();
     connection.readyState = 0;
     connectMock.mockReset();
     closeMock.mockReset();
@@ -44,21 +49,37 @@ describe('DatabaseManager', () => {
 
   it('does not throw when the initial MongoDB connection is unavailable', async () => {
     connectMock.mockRejectedValue(new Error('Atlas unavailable'));
-    const { databaseManager } = await import('./database.manager.js?initial-failure');
+    const { databaseManager } = await import('./database.manager.js');
 
     await expect(databaseManager.start()).resolves.toBeUndefined();
     expect(databaseManager.status().ready).toBe(false);
     expect(databaseManager.status().state).toBe('disconnected');
+    expect(databaseManager.status().consecutiveFailures).toBe(1);
   });
 
   it('becomes ready when the driver reports connected', async () => {
     connectMock.mockResolvedValue(undefined);
-    const { databaseManager } = await import('./database.manager.js?connected');
-
     connection.readyState = 1;
+    const { databaseManager } = await import('./database.manager.js');
+
     await databaseManager.start();
 
     expect(databaseManager.status().ready).toBe(true);
     expect(databaseManager.status().state).toBe('connected');
+  });
+
+  it('publishes disconnected then connected lifecycle transitions', async () => {
+    connectMock.mockRejectedValue(new Error('Atlas unavailable'));
+    const { databaseManager } = await import('./database.manager.js');
+    const changes: string[] = [];
+    databaseManager.onLifecycleChange((status) => changes.push(status.state));
+
+    await databaseManager.start();
+    listeners.get('disconnected')?.();
+    listeners.get('connected')?.();
+
+    expect(changes).toContain('disconnected');
+    expect(changes).toContain('connected');
+    expect(databaseManager.status().ready).toBe(true);
   });
 });
