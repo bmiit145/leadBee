@@ -3,6 +3,8 @@ import { env } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
 import type { DependencyStatus, DependencyState, InfrastructureDependency } from '../dependency.types.js';
 
+export type DatabaseLifecycleListener = (status: DependencyStatus) => void;
+
 /**
  * Owns MongoDB lifecycle state while leaving actual connection recovery to
  * Mongoose/MongoDB driver's topology management.
@@ -13,6 +15,7 @@ class DatabaseManager implements InfrastructureDependency {
   private lastDisconnectedAt: string | null = null;
   private consecutiveFailures = 0;
   private listenersBound = false;
+  private readonly lifecycleListeners = new Set<DatabaseLifecycleListener>();
 
   async start(): Promise<void> {
     this.configure();
@@ -46,12 +49,14 @@ class DatabaseManager implements InfrastructureDependency {
   async stop(): Promise<void> {
     if (mongoose.connection.readyState === 0) {
       this.state = 'disconnected';
+      this.publish();
       return;
     }
 
     this.state = 'disconnecting';
     await mongoose.connection.close(false);
     this.state = 'disconnected';
+    this.publish();
     logger.info('MongoDB connection closed');
   }
 
@@ -64,6 +69,11 @@ class DatabaseManager implements InfrastructureDependency {
       lastDisconnectedAt: this.lastDisconnectedAt,
       consecutiveFailures: this.consecutiveFailures,
     };
+  }
+
+  onLifecycleChange(listener: DatabaseLifecycleListener): () => void {
+    this.lifecycleListeners.add(listener);
+    return () => this.lifecycleListeners.delete(listener);
   }
 
   private configure(): void {
@@ -84,6 +94,7 @@ class DatabaseManager implements InfrastructureDependency {
     mongoose.connection.on('connected', () => this.markConnected());
     mongoose.connection.on('error', (err) => {
       this.state = 'degraded';
+      this.publish();
       logger.error({ err }, 'MongoDB error');
     });
     mongoose.connection.on('disconnected', () => {
@@ -96,6 +107,7 @@ class DatabaseManager implements InfrastructureDependency {
     this.state = 'connected';
     this.consecutiveFailures = 0;
     this.lastConnectedAt = new Date().toISOString();
+    this.publish();
     logger.info('MongoDB connected');
   }
 
@@ -103,7 +115,19 @@ class DatabaseManager implements InfrastructureDependency {
     this.state = 'disconnected';
     this.consecutiveFailures += 1;
     this.lastDisconnectedAt = new Date().toISOString();
+    this.publish();
     if (err) logger.error({ err, consecutiveFailures: this.consecutiveFailures }, 'MongoDB initial connection failed');
+  }
+
+  private publish(): void {
+    const status = this.status();
+    for (const listener of this.lifecycleListeners) {
+      try {
+        listener(status);
+      } catch (err) {
+        logger.error({ err }, 'database lifecycle listener failed');
+      }
+    }
   }
 }
 
