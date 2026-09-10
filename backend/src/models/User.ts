@@ -7,8 +7,7 @@ import { tenantJsonTransform } from '../lib/toJSON.js';
 /**
  * A person inside one organization.
  *
- * Note what is *not* here: a `super_admin` role. Platform staff live in
- * `PlatformAdmin`, in their own realm. See models/PlatformAdmin.ts.
+ * Platform staff live in PlatformAdmin, in their own authentication realm.
  */
 export interface IUser extends Document {
   _id: mongoose.Types.ObjectId;
@@ -19,23 +18,18 @@ export interface IUser extends Document {
   password: string;
   role: Role;
   roleId?: mongoose.Types.ObjectId;
-  /** Per-user grants layered on top of the role's set. */
   permissions: string[];
-  /** Lead groupings this user works. Empty means "all of them". */
   projects: mongoose.Types.ObjectId[];
-  /** Pre-selected grouping on the create-lead form. */
   defaultProject?: mongoose.Types.ObjectId;
   avatarUrl?: string;
   designation?: string;
   isActive: boolean;
   refreshTokens: string[];
   lastLoginAt?: Date;
-  /** Expo push token, for follow-up and meeting reminders. */
   pushToken?: string;
   locale: string;
   createdAt: Date;
   updatedAt: Date;
-
   comparePassword(candidate: string): Promise<boolean>;
 }
 
@@ -46,21 +40,21 @@ const userSchema = new Schema<IUser>(
       type: String,
       lowercase: true,
       trim: true,
-      // An empty string is not a value — without this, several users with a
-      // blank email collide on the sparse unique index.
       set: (value: string | null | undefined) => {
         if (value === null || value === undefined) return undefined;
         const normalized = value.trim().toLowerCase();
         return normalized === '' ? undefined : normalized;
       },
     },
-    phone: { type: String, required: true, trim: true },
-    password: { type: String, required: true, minlength: 6, select: false },
-    role: {
+    /** Canonical storage shape. Validation/normalization happens in services before save. */
+    phone: {
       type: String,
-      enum: Object.values(ROLES),
-      default: ROLES.USER,
+      required: true,
+      trim: true,
+      match: /^\+[1-9]\d{6,14}$/,
     },
+    password: { type: String, required: true, minlength: 6, select: false },
+    role: { type: String, enum: Object.values(ROLES), default: ROLES.USER },
     roleId: { type: Schema.Types.ObjectId, ref: 'Role' },
     permissions: { type: [String], default: [] },
     projects: { type: [{ type: Schema.Types.ObjectId, ref: 'Project' }], default: [] },
@@ -78,10 +72,6 @@ const userSchema = new Schema<IUser>(
 
 userSchema.plugin(tenantPlugin);
 
-// ─── Uniqueness is per tenant, never global ──────────────────────────────────
-// The same human can be a user of two different organizations with the same
-// phone number. A global unique index would let tenant A's signup block tenant
-// B's, which is both a bug and an enumeration oracle.
 userSchema.index({ organizationId: 1, phone: 1 }, { unique: true });
 userSchema.index(
   { organizationId: 1, email: 1 },
@@ -103,9 +93,6 @@ userSchema.methods.comparePassword = function (
   return bcrypt.compare(candidate, this.password);
 };
 
-// tenantPlugin already installs a toJSON transform; this replaces it, so the
-// tenant key has to be named again here or organizationId leaks back out.
-// `tenantJsonTransform` strips it for us.
 userSchema.set('toJSON', {
   virtuals: true,
   transform: tenantJsonTransform('password', 'refreshTokens', 'pushToken'),
