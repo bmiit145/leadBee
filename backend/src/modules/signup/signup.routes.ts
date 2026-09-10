@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { CountryCode } from 'libphonenumber-js';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { organizationService, normalizeSlug } from '../organizations/organization.service.js';
@@ -7,6 +8,7 @@ import { commonErrors, okEnvelope } from '../../lib/schemas.js';
 import { ok } from '../../lib/response.js';
 import { AppError } from '../../lib/errors.js';
 import { env } from '../../config/env.js';
+import { normalizePhoneNumberOrThrow } from '../../lib/phoneNumber.js';
 
 const signupBody = z.object({
   organizationName: z.string().trim().min(2, 'Organization name is required').max(120),
@@ -18,10 +20,15 @@ const signupBody = z.object({
     .regex(/^[a-z0-9-]+$/, 'Use lowercase letters, numbers and hyphens only')
     .optional(),
   ownerName: z.string().trim().min(2, 'Your name is required').max(80),
-  ownerPhone: z.string().trim().min(6, 'A valid phone number is required').max(20),
+  ownerPhone: z.string().trim().min(3, 'A valid phone number is required').max(30),
   ownerEmail: z.string().email('A valid email is required'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
+  country: z.string().trim().toUpperCase().length(2).optional(),
 });
+
+function countryCode(value: string | undefined): CountryCode {
+  return (value ?? 'IN') as CountryCode;
+}
 
 export async function signupRoutes(app: FastifyInstance): Promise<void> {
   const r = app.withTypeProvider<ZodTypeProvider>();
@@ -29,16 +36,14 @@ export async function signupRoutes(app: FastifyInstance): Promise<void> {
   r.route({
     method: 'POST',
     url: '/',
-    // Signup creates a tenant — expensive and abusable. Tighter than the
-    // default, keyed on IP since there is no account yet.
     config: { rateLimit: { max: 5, timeWindow: '1 hour' } },
     schema: {
       tags: ['signup'],
       summary: 'Create an organization and its owner (self-serve)',
       description:
         'Creates a trialing organization, its built-in roles, an owner user and ' +
-        'starter lookups, then signs the owner in. Disabled when ' +
-        '`ALLOW_SELF_SERVE_SIGNUP=false`.',
+        'starter lookups, then signs the owner in. Phone numbers are normalized ' +
+        'to E.164 before persistence. Disabled when `ALLOW_SELF_SERVE_SIGNUP=false`.',
       body: signupBody,
       response: { 201: okEnvelope, ...commonErrors },
     },
@@ -50,25 +55,25 @@ export async function signupRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const body = request.body;
+      let ownerPhone: string;
+      try {
+        ownerPhone = normalizePhoneNumberOrThrow(body.ownerPhone, countryCode(body.country));
+      } catch (error) {
+        throw AppError.badRequest(error instanceof Error ? error.message : 'Enter a valid phone number');
+      }
+
       const { organization, owner } = await organizationService.provision({
         organizationName: body.organizationName,
         slug: body.slug,
         ownerName: body.ownerName,
-        ownerPhone: body.ownerPhone,
+        ownerPhone,
         ownerEmail: body.ownerEmail,
         ownerPassword: body.password,
         source: 'self_serve',
       });
 
-      // Sign the owner straight in — a signup that ends on a login screen is a
-      // signup that loses people.
-      const result = await authService.login(
-        body.ownerPhone,
-        body.password,
-        organization._id.toString()
-      );
+      const result = await authService.login(ownerPhone, body.password, organization._id.toString());
       if ('needsOrgSelection' in result) {
-        // Unreachable: the org was just created and passed explicitly.
         throw AppError.internal('Unexpected organization ambiguity after signup');
       }
 
@@ -99,8 +104,6 @@ export async function signupRoutes(app: FastifyInstance): Promise<void> {
       response: { 200: okEnvelope, ...commonErrors },
     },
     handler: async (request) => {
-      // normalizeSlug throws on input too short to be a handle; report that as
-      // "unavailable with a reason" rather than a 400 on every keystroke.
       let normalized: string;
       try {
         normalized = normalizeSlug(request.query.slug);
