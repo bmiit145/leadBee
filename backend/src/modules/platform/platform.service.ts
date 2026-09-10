@@ -7,7 +7,7 @@ import type { IPlatformAdmin } from '../../models/PlatformAdmin.js';
 import { AppError } from '../../lib/errors.js';
 import { pageParams } from '../../lib/pagination.js';
 import { runInTenantScope } from '../../lib/tenantContext.js';
-import { ORG_STATUSES, ROLES, type OrgStatus } from '../../config/constants.js';
+import { ORG_STATUSES, ROLES, type OrgStatus, type Role } from '../../config/constants.js';
 
 export interface OrgListFilters {
   status?: OrgStatus;
@@ -67,7 +67,6 @@ export const platformService = {
       ownerName?: string;
       ownerPhone?: string;
       ownerEmail?: string | null;
-      phoneCountry?: string;
     },
     admin: IPlatformAdmin,
     context: { ip?: string; userAgent?: string } = {}
@@ -76,12 +75,6 @@ export const platformService = {
     const organization = await Organization.findById(orgObjectId);
     if (!organization) throw AppError.notFound('Organization not found');
 
-    if (input.slug !== undefined && input.slug !== organization.slug) {
-      const existing = await Organization.findOne({ slug: input.slug, _id: { $ne: orgObjectId } }).lean();
-      if (existing) throw AppError.conflict(`The handle "${input.slug}" is already taken`, { slug: input.slug });
-      organization.slug = input.slug;
-    }
-
     const before = {
       name: organization.name,
       slug: organization.slug,
@@ -89,17 +82,18 @@ export const platformService = {
       contactPhone: organization.contactPhone,
     };
 
+    if (input.slug !== undefined && input.slug !== organization.slug) {
+      const existing = await Organization.findOne({ slug: input.slug, _id: { $ne: orgObjectId } }).lean();
+      if (existing) throw AppError.conflict(`The handle "${input.slug}" is already taken`, { slug: input.slug });
+      organization.slug = input.slug;
+    }
+
     if (input.organizationName !== undefined) organization.name = input.organizationName;
     if (input.billingEmail !== undefined) organization.billingEmail = input.billingEmail ?? undefined;
     if (input.contactPhone !== undefined) organization.contactPhone = input.contactPhone ?? undefined;
 
     const owner = await runInTenantScope(
-      {
-        organizationId: orgObjectId,
-        userId: new Types.ObjectId(),
-        role: 'platform',
-        permissions: ['*'],
-      },
+      { organizationId: orgObjectId, userId: new Types.ObjectId(), role: 'platform', permissions: ['*'] },
       async () => {
         const found = await User.findOne({ role: ROLES.OWNER });
         if (!found) throw AppError.notFound('Organization owner not found');
@@ -125,7 +119,7 @@ export const platformService = {
         slug: organization.slug,
         billingEmail: organization.billingEmail,
         contactPhone: organization.contactPhone,
-        ownerId: owner._id,
+        owner: { id: owner._id.toString(), name: owner.name, email: owner.email, phone: owner.phone },
       },
       ...context,
     });
@@ -152,32 +146,32 @@ export const platformService = {
     if (!organization) throw AppError.notFound('Organization not found');
 
     const user = await runInTenantScope(
-      {
-        organizationId: orgObjectId,
-        userId: new Types.ObjectId(),
-        role: 'platform',
-        permissions: ['*'],
-      },
+      { organizationId: orgObjectId, userId: new Types.ObjectId(), role: 'platform', permissions: ['*'] },
       async () => {
-        const found = await User.findById(userId).select('+password');
+        const found = await User.findById(userId).select('+password +refreshTokens');
         if (!found) throw AppError.notFound('User not found in this organization');
+
+        if (input.role !== undefined) {
+          const nextRole = input.role as Role;
+          if (!Object.values(ROLES).includes(nextRole)) throw AppError.badRequest('Invalid user role');
+          if (found.role === ROLES.OWNER && nextRole !== ROLES.OWNER) {
+            const owners = await User.countDocuments({ role: ROLES.OWNER, isActive: true });
+            if (owners <= 1) throw AppError.conflict('This is the only active owner. Promote another user to owner first.');
+          }
+          found.role = nextRole;
+        }
+
+        const before = { name: found.name, phone: found.phone, email: found.email, designation: found.designation, role: found.role };
         if (input.name !== undefined) found.name = input.name;
         if (input.phone !== undefined) found.phone = input.phone;
         if (input.email !== undefined) found.email = input.email ?? undefined;
         if (input.designation !== undefined) found.designation = input.designation ?? undefined;
-        if (input.role !== undefined) {
-          if (!Object.values(ROLES).includes(input.role as (typeof ROLES)[keyof typeof ROLES])) {
-            throw AppError.badRequest('Invalid user role');
-          }
-          found.role = input.role as (typeof ROLES)[keyof typeof ROLES];
-        }
         if (input.password !== undefined) {
           found.password = input.password;
-          // Password changes invalidate every existing session for this user.
           found.refreshTokens = [];
         }
         await found.save();
-        return found;
+        return { user: found, before };
       }
     );
 
@@ -186,39 +180,29 @@ export const platformService = {
       organization,
       admin,
       targetType: 'User',
-      targetId: user._id,
+      targetId: user.user._id,
+      before: user.before,
       after: {
-        name: user.name,
-        phone: user.phone,
-        email: user.email,
-        designation: user.designation,
-        role: user.role,
+        name: user.user.name,
+        phone: user.user.phone,
+        email: user.user.email,
+        designation: user.user.designation,
+        role: user.user.role,
         passwordChanged: input.password !== undefined,
       },
       ...context,
     });
 
-    return user;
+    return user.user;
   },
 
-  async setOrganizationStatus(
-    organizationId: string,
-    status: OrgStatus,
-    admin: IPlatformAdmin,
-    reason?: string,
-    context: { ip?: string; userAgent?: string } = {}
-  ): Promise<IOrganization> {
+  async setOrganizationStatus(organizationId: string, status: OrgStatus, admin: IPlatformAdmin, reason?: string, context: { ip?: string; userAgent?: string } = {}): Promise<IOrganization> {
     const organization = await Organization.findById(organizationId);
     if (!organization) throw AppError.notFound('Organization not found');
     const before = { status: organization.status, suspendedReason: organization.suspendedReason };
     organization.status = status;
-    if (status === ORG_STATUSES.SUSPENDED) {
-      organization.suspendedAt = new Date();
-      organization.suspendedReason = reason;
-    } else {
-      organization.suspendedAt = undefined;
-      organization.suspendedReason = undefined;
-    }
+    if (status === ORG_STATUSES.SUSPENDED) { organization.suspendedAt = new Date(); organization.suspendedReason = reason; }
+    else { organization.suspendedAt = undefined; organization.suspendedReason = undefined; }
     await organization.save();
     await recordPlatformAction({ action: 'org_status_changed', organization, admin, reason, before, after: { status }, ...context });
     return organization;
@@ -230,18 +214,12 @@ export const platformService = {
     const [byStatus, byPlan, totals, recentSignups, expiringTrials] = await Promise.all([
       Organization.aggregate<{ _id: string; count: number }>([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
       Organization.aggregate<{ _id: string; count: number }>([{ $group: { _id: '$plan', count: { $sum: 1 } } }]),
-      Organization.aggregate<{ _id: null; organizations: number; users: number; leads: number }>([
-        { $group: { _id: null, organizations: { $sum: 1 }, users: { $sum: '$usage.users' }, leads: { $sum: '$usage.leads' } } },
-      ]),
+      Organization.aggregate<{ _id: null; organizations: number; users: number; leads: number }>([{ $group: { _id: null, organizations: { $sum: 1 }, users: { $sum: '$usage.users' }, leads: { $sum: '$usage.leads' } } }]),
       Organization.countDocuments({ createdAt: { $gte: thirtyDaysAgo } }),
       Organization.countDocuments({ status: ORG_STATUSES.TRIALING, trialEndsAt: { $gte: now, $lte: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000) } }),
     ]);
     const totalsRow = totals[0] ?? { organizations: 0, users: 0, leads: 0 };
-    return {
-      totals: { organizations: totalsRow.organizations, users: totalsRow.users, leads: totalsRow.leads },
-      byStatus: toMap(byStatus), byPlan: toMap(byPlan), recentSignups, expiringTrials,
-      generatedAt: now.toISOString(),
-    };
+    return { totals: { organizations: totalsRow.organizations, users: totalsRow.users, leads: totalsRow.leads }, byStatus: toMap(byStatus), byPlan: toMap(byPlan), recentSignups, expiringTrials, generatedAt: now.toISOString() };
   },
 
   async listOrganizationUsers(organizationId: string, page = 1, limit = 25) {
@@ -259,13 +237,7 @@ export const platformService = {
     );
   },
 
-  async setUserActive(
-    organizationId: string,
-    userId: string,
-    isActive: boolean,
-    admin: IPlatformAdmin,
-    context: { ip?: string; userAgent?: string } = {}
-  ) {
+  async setUserActive(organizationId: string, userId: string, isActive: boolean, admin: IPlatformAdmin, context: { ip?: string; userAgent?: string } = {}) {
     const orgObjectId = new Types.ObjectId(organizationId);
     const organization = await Organization.findById(orgObjectId);
     if (!organization) throw AppError.notFound('Organization not found');
@@ -274,6 +246,11 @@ export const platformService = {
       async () => {
         const found = await User.findById(userId).select('+refreshTokens');
         if (!found) throw AppError.notFound('User not found in this organization');
+        if (found.isActive === isActive) return found;
+        if (!isActive && found.role === ROLES.OWNER) {
+          const owners = await User.countDocuments({ role: ROLES.OWNER, isActive: true });
+          if (owners <= 1) throw AppError.conflict('This is the only active owner. Promote another user to owner first.');
+        }
         found.isActive = isActive;
         if (!isActive) found.refreshTokens = [];
         await found.save();
@@ -329,8 +306,5 @@ export async function recordPlatformAction(input: PlatformActionInput): Promise<
 }
 
 function toMap(rows: Array<{ _id: string; count: number }>): Record<string, number> {
-  return rows.reduce<Record<string, number>>((acc, { _id, count }) => {
-    if (_id) acc[_id] = count;
-    return acc;
-  }, {});
+  return rows.reduce<Record<string, number>>((acc, { _id, count }) => { if (_id) acc[_id] = count; return acc; }, {});
 }
