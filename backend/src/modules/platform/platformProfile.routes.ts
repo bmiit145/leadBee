@@ -11,8 +11,6 @@ const security = [{ platformToken: [] }];
 const roleSchema = z.enum(Object.values(ROLES) as [string, ...string[]]);
 
 export async function platformProfileRoutes(app: FastifyInstance): Promise<void> {
-  const r = app.withTypeProvider<ZodTypeProvider>();
-
   await app.register(async (secured) => {
     const s = secured.withTypeProvider<ZodTypeProvider>();
     s.addHook('preHandler', app.authenticatePlatform);
@@ -25,7 +23,7 @@ export async function platformProfileRoutes(app: FastifyInstance): Promise<void>
         tags: ['platform'],
         summary: 'Edit tenant account and owner profile',
         security,
-        params: objectIdSchema,
+        params: z.object({ id: objectIdSchema }),
         body: z.object({
           organizationName: z.string().trim().min(2).max(120).optional(),
           slug: z.string().trim().min(3).max(50).regex(/^[a-z0-9-]+$/).optional(),
