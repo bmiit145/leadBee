@@ -203,9 +203,6 @@ export function OrganizationDetailPage() {
                   className="w-auto"
                   aria-label="Change plan"
                 >
-                  {/* The tenant's current plan is listed even when it is no
-                      longer assignable, so a grandfathered account does not
-                      render an empty select. */}
                   {!assignablePlans.some((p) => p.key === org.plan) && (
                     <option value={org.plan}>{planLabel(allPlans, org.plan)}</option>
                   )}
@@ -264,6 +261,11 @@ export function OrganizationDetailPage() {
                     {org.owner.email}
                   </span>
                 )}
+                {org?.owner?.phone && (
+                  <span className="block text-[12px] text-[var(--text-muted)]">
+                    {org.owner.phone}
+                  </span>
+                )}
               </span>
             </Fact>
 
@@ -296,10 +298,7 @@ export function OrganizationDetailPage() {
         </Card>
 
         <Card>
-          <CardHeader
-            title="Internal notes"
-            description="Never shown to the tenant"
-          />
+          <CardHeader title="Internal notes" description="Never shown to the tenant" />
           <div className="space-y-3 p-5">
             <Textarea
               value={notes ?? org?.internalNotes ?? ''}
@@ -310,96 +309,40 @@ export function OrganizationDetailPage() {
             />
             {notes !== null && notes !== (org?.internalNotes ?? '') && (
               <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  loading={saveNotes.isPending}
-                  onClick={() => saveNotes.mutate(notes)}
-                >
-                  Save
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setNotes(null)}>
-                  Discard
-                </Button>
+                <Button size="sm" loading={saveNotes.isPending} onClick={() => saveNotes.mutate(notes)}>Save</Button>
+                <Button size="sm" variant="ghost" onClick={() => setNotes(null)}>Discard</Button>
               </div>
             )}
           </div>
         </Card>
       </div>
 
-      {/* ─── Users ──────────────────────────────────────────────────────────── */}
       <Card>
-        <CardHeader
-          title="Users"
-          description="Deactivating ends that person’s sessions immediately"
-        />
-
+        <CardHeader title="Users" description="Deactivating ends that person’s sessions immediately" />
         {usersQuery.isError ? (
-          <ErrorState
-            message={errorMessage(usersQuery.error)}
-            onRetry={() => void usersQuery.refetch()}
-          />
+          <ErrorState message={errorMessage(usersQuery.error)} onRetry={() => void usersQuery.refetch()} />
         ) : (
           <TableWrap>
             <Table>
               <thead>
-                <tr>
-                  <Th>Name</Th>
-                  <Th>Role</Th>
-                  <Th>Phone</Th>
-                  <Th>Status</Th>
-                  <Th>Last sign-in</Th>
-                  <Th className="text-right">Action</Th>
-                </tr>
+                <tr><Th>Name</Th><Th>Role</Th><Th>Phone</Th><Th>Status</Th><Th>Last sign-in</Th><Th className="text-right">Action</Th></tr>
               </thead>
-
               {usersQuery.isPending ? (
                 <TableSkeleton rows={5} cols={6} />
               ) : usersQuery.data && usersQuery.data.data.length > 0 ? (
                 <tbody>
                   {usersQuery.data.data.map((user) => (
                     <Tr key={user._id}>
-                      <Td>
-                        <span className="font-medium text-[var(--text)]">{user.name}</span>
-                        {user.email && (
-                          <span className="block text-[12px] text-[var(--text-muted)]">
-                            {user.email}
-                          </span>
-                        )}
-                      </Td>
-                      <Td className="text-[13px] capitalize text-[var(--text)]">
-                        {user.role}
-                      </Td>
-                      <Td className="tabular text-[13px] text-[var(--text-muted)]">
-                        {user.phone}
-                      </Td>
-                      <Td>
-                        <ActiveDot active={user.isActive} />
-                      </Td>
-                      <Td className="text-[13px] text-[var(--text-muted)]">
-                        {formatRelative(user.lastLoginAt)}
-                      </Td>
+                      <Td><span className="font-medium text-[var(--text)]">{user.name}</span>{user.email && <span className="block text-[12px] text-[var(--text-muted)]">{user.email}</span>}</Td>
+                      <Td className="text-[13px] capitalize text-[var(--text)]">{user.role}</Td>
+                      <Td className="tabular text-[13px] text-[var(--text-muted)]">{user.phone}</Td>
+                      <Td><ActiveDot active={user.isActive} /></Td>
+                      <Td className="text-[13px] text-[var(--text-muted)]">{formatRelative(user.lastLoginAt)}</Td>
                       <Td className="text-right">
                         <div className="flex justify-end gap-2">
-                          {can('users.update') && (
-                            <Button size="sm" variant="outline" onClick={() => setEditUser(user)}>
-                              Edit
-                            </Button>
-                          )}
+                          {can('users.update') && <Button size="sm" variant="outline" onClick={() => setEditUser(user)}><Edit3 className="h-3.5 w-3.5" aria-hidden />Edit</Button>}
                           {can('users.deactivate') && (
-                            <Button
-                              size="sm"
-                              variant={user.isActive ? 'outline' : 'primary'}
-                              loading={
-                                toggleUser.isPending &&
-                                toggleUser.variables?.userId === user._id
-                              }
-                              onClick={() =>
-                                toggleUser.mutate({
-                                  userId: user._id,
-                                  isActive: !user.isActive,
-                                })
-                              }
-                            >
+                            <Button size="sm" variant={user.isActive ? 'outline' : 'primary'} loading={toggleUser.isPending && toggleUser.variables?.userId === user._id} onClick={() => toggleUser.mutate({ userId: user._id, isActive: !user.isActive })}>
                               {user.isActive ? 'Deactivate' : 'Reactivate'}
                             </Button>
                           )}
@@ -409,76 +352,25 @@ export function OrganizationDetailPage() {
                   ))}
                 </tbody>
               ) : (
-                <tbody>
-                  <tr>
-                    <td colSpan={6}>
-                      <EmptyState
-                        icon={<Users className="h-7 w-7" />}
-                        title="No users yet"
-                        description="This tenant has not added anyone beyond its owner."
-                      />
-                    </td>
-                  </tr>
-                </tbody>
+                <tbody><tr><td colSpan={6}><EmptyState icon={<Users className="h-7 w-7" />} title="No users yet" description="This tenant has not added anyone beyond its owner." /></td></tr></tbody>
               )}
             </Table>
           </TableWrap>
         )}
-
         {usersQuery.data && usersQuery.data.totalPages > 1 && (
           <div className="flex items-center justify-between border-t border-[var(--border)] px-4 py-3">
-            <p className="text-[13px] text-[var(--text-muted)]">
-              Page {usersQuery.data.page} of {usersQuery.data.totalPages}
-            </p>
+            <p className="text-[13px] text-[var(--text-muted)]">Page {usersQuery.data.page} of {usersQuery.data.totalPages}</p>
             <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={usersPage <= 1}
-                onClick={() => setUsersPage((p) => p - 1)}
-              >
-                Previous
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={usersPage >= usersQuery.data.totalPages}
-                onClick={() => setUsersPage((p) => p + 1)}
-              >
-                Next
-              </Button>
+              <Button variant="outline" size="sm" disabled={usersPage <= 1} onClick={() => setUsersPage((p) => p - 1)}>Previous</Button>
+              <Button variant="outline" size="sm" disabled={usersPage >= usersQuery.data.totalPages} onClick={() => setUsersPage((p) => p + 1)}>Next</Button>
             </div>
           </div>
         )}
       </Card>
 
-      <SuspendDialog
-        open={suspendOpen}
-        organizationId={id}
-        organizationName={org?.name ?? ''}
-        onClose={() => setSuspendOpen(false)}
-        onSuspended={invalidateOrg}
-      />
-      {can('orgs.update') && (
-        <EditOrganizationDialog
-          open={editOpen}
-          organization={org ?? null}
-          onClose={() => setEditOpen(false)}
-          onSaved={() => {
-            setEditOpen(false);
-            toast.success('Organization updated');
-            invalidateOrg();
-          }}
-        />
-      )}
-      {can('users.update') && (
-        <EditUserDialog
-          open={Boolean(editUser)}
-          organizationId={id}
-          user={editUser}
-          onClose={() => setEditUser(null)}
-        />
-      )}
+      <SuspendDialog open={suspendOpen} organizationId={id} organizationName={org?.name ?? ''} onClose={() => setSuspendOpen(false)} onSuspended={invalidateOrg} />
+      {can('orgs.update') && <EditOrganizationDialog open={editOpen} organization={org ?? null} onClose={() => setEditOpen(false)} onSaved={() => { setEditOpen(false); toast.success('Organization updated'); invalidateOrg(); }} />}
+      {can('users.update') && <EditUserDialog open={Boolean(editUser)} organizationId={id} user={editUser} onClose={() => setEditUser(null)} />}
     </div>
   );
 }
@@ -486,9 +378,7 @@ export function OrganizationDetailPage() {
 function Fact({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <dt className="text-[12px] uppercase tracking-wider text-[var(--text-muted)]">
-        {label}
-      </dt>
+      <dt className="text-[12px] uppercase tracking-wider text-[var(--text-muted)]">{label}</dt>
       <dd className="mt-1">{children}</dd>
     </div>
   );
