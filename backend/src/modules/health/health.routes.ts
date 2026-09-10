@@ -1,15 +1,21 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { databaseState } from '../../config/database.js';
+import { applicationLifecycle } from '../../infrastructure/lifecycle/application.infrastructure.js';
+
+const dependencySchema = z.object({
+  state: z.string(),
+  ready: z.boolean(),
+  consecutiveFailures: z.number(),
+});
 
 export async function healthRoutes(app: FastifyInstance): Promise<void> {
   const r = app.withTypeProvider<ZodTypeProvider>();
 
   /**
-   * Liveness. Answers "is this process running" and nothing else, so a database
-   * blip never causes the orchestrator to kill and restart a healthy process
-   * that would have recovered on its own.
+   * Liveness. Answers "is this process running" and nothing else, so a
+   * transient infrastructure outage never causes the orchestrator to kill and
+   * restart a healthy process that can recover in place.
    */
   r.route({
     method: 'GET',
@@ -32,9 +38,9 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * Readiness. Answers "can this process serve traffic", which does depend on
-   * the database — a 503 here pulls the instance out of the load balancer
-   * without restarting it.
+   * Readiness. Uses the same application-wide dependency registry as startup
+   * and shutdown. Adding another required infrastructure dependency therefore
+   * updates readiness automatically without coupling this route to that service.
    */
   r.route({
     method: 'GET',
@@ -42,15 +48,31 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
     schema: {
       tags: ['health'],
       response: {
-        200: z.object({ status: z.string(), database: z.string() }),
-        503: z.object({ status: z.string(), database: z.string() }),
+        200: z.object({
+          status: z.literal('ready'),
+          dependencies: z.record(dependencySchema),
+        }),
+        503: z.object({
+          status: z.literal('not-ready'),
+          dependencies: z.record(dependencySchema),
+        }),
       },
     },
     handler: async (_request, reply) => {
-      const db = databaseState();
-      return reply
-        .status(db.ok ? 200 : 503)
-        .send({ status: db.ok ? 'ready' : 'not-ready', database: db.state });
+      const statuses = applicationLifecycle.statuses();
+      const dependencies = Object.fromEntries(
+        statuses.map((dependency) => [dependency.name, {
+          state: dependency.state,
+          ready: dependency.ready,
+          consecutiveFailures: dependency.consecutiveFailures,
+        }])
+      );
+      const ready = applicationLifecycle.isReady();
+
+      return reply.status(ready ? 200 : 503).send({
+        status: ready ? 'ready' : 'not-ready',
+        dependencies,
+      });
     },
   });
 }
