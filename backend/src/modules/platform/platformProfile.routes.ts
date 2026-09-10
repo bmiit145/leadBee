@@ -4,11 +4,11 @@ import { z } from 'zod';
 import { mobilePhoneSchema, contactPhoneSchema } from '../../lib/phone.js';
 import { objectIdSchema, okEnvelope, commonErrors } from '../../lib/schemas.js';
 import { ok } from '../../lib/response.js';
-import { ROLES } from '../../config/constants.js';
+import { ROLES, type Role } from '../../config/constants.js';
 import { updateOrganizationProfile, updateOrganizationUser } from './platformProfile.service.js';
 
 const security = [{ platformToken: [] }];
-const roleSchema = z.enum(Object.values(ROLES) as [string, ...string[]]);
+const roleSchema = z.enum(Object.values(ROLES) as [Role, ...Role[]]);
 
 export async function platformProfileRoutes(app: FastifyInstance): Promise<void> {
   await app.register(async (secured) => {
