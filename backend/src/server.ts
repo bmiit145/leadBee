@@ -8,6 +8,16 @@ import { logger } from './lib/logger.js';
 import { registerModuleManifests } from './entitlements/registry.js';
 import './models/index.js';
 
+async function registerCatalogueIfReady(): Promise<void> {
+  if (!databaseManager.status().ready) return;
+
+  try {
+    await registerModuleManifests();
+  } catch (err) {
+    logger.error({ err }, 'entitlement catalogue registration failed');
+  }
+}
+
 async function main(): Promise<void> {
   const lifecycle = new ApplicationLifecycle([databaseManager]);
   const app = await buildApp();
@@ -15,13 +25,14 @@ async function main(): Promise<void> {
   // The HTTP process is independent from transient infrastructure reachability.
   // Readiness reflects dependency state; liveness remains available so an
   // orchestrator does not restart a process that can recover in place.
-  await lifecycle.start();
+  databaseManager.onLifecycleChange((status) => {
+    if (status.state === 'connected') {
+      void registerCatalogueIfReady();
+    }
+  });
 
-  if (databaseManager.status().ready) {
-    await registerModuleManifests();
-  } else {
-    logger.warn('MongoDB unavailable at boot; entitlement catalogue registration deferred');
-  }
+  await lifecycle.start();
+  await registerCatalogueIfReady();
 
   await app.listen({ port: env.PORT, host: env.HOST });
 
