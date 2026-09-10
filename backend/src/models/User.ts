@@ -4,11 +4,7 @@ import { ROLES, type Role } from '../config/constants.js';
 import { tenantPlugin } from '../lib/tenantPlugin.js';
 import { tenantJsonTransform } from '../lib/toJSON.js';
 
-/**
- * A person inside one organization.
- *
- * Platform staff live in PlatformAdmin, in their own authentication realm.
- */
+/** A person inside one organization. Platform admins are a separate realm. */
 export interface IUser extends Document {
   _id: mongoose.Types.ObjectId;
   organizationId: mongoose.Types.ObjectId;
@@ -46,13 +42,8 @@ const userSchema = new Schema<IUser>(
         return normalized === '' ? undefined : normalized;
       },
     },
-    /** Canonical storage shape. Validation/normalization happens in services before save. */
-    phone: {
-      type: String,
-      required: true,
-      trim: true,
-      match: /^\+[1-9]\d{6,14}$/,
-    },
+    /** Phone values are canonicalized by every application write boundary. */
+    phone: { type: String, required: true, trim: true },
     password: { type: String, required: true, minlength: 6, select: false },
     role: { type: String, enum: Object.values(ROLES), default: ROLES.USER },
     roleId: { type: Schema.Types.ObjectId, ref: 'Role' },
@@ -71,12 +62,8 @@ const userSchema = new Schema<IUser>(
 );
 
 userSchema.plugin(tenantPlugin);
-
 userSchema.index({ organizationId: 1, phone: 1 }, { unique: true });
-userSchema.index(
-  { organizationId: 1, email: 1 },
-  { unique: true, partialFilterExpression: { email: { $type: 'string' } } }
-);
+userSchema.index({ organizationId: 1, email: 1 }, { unique: true, partialFilterExpression: { email: { $type: 'string' } } });
 userSchema.index({ organizationId: 1, isActive: 1, role: 1 });
 userSchema.index({ organizationId: 1, name: 1 });
 
@@ -86,10 +73,7 @@ userSchema.pre('save', async function () {
   this.password = await bcrypt.hash(this.password, salt);
 });
 
-userSchema.methods.comparePassword = function (
-  this: IUser,
-  candidate: string
-): Promise<boolean> {
+userSchema.methods.comparePassword = function (this: IUser, candidate: string): Promise<boolean> {
   return bcrypt.compare(candidate, this.password);
 };
 
