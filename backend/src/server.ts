@@ -1,9 +1,8 @@
 import closeWithGrace from 'close-with-grace';
 import { buildApp } from './app.js';
 import { env } from './config/env.js';
-import { disconnectDatabase } from './config/database.js';
 import { databaseManager } from './infrastructure/database/database.manager.js';
-import { ApplicationLifecycle } from './infrastructure/lifecycle/application.lifecycle.js';
+import { applicationLifecycle } from './infrastructure/lifecycle/application.infrastructure.js';
 import { logger } from './lib/logger.js';
 import { registerModuleManifests } from './entitlements/registry.js';
 import './models/index.js';
@@ -46,17 +45,16 @@ async function registerCatalogue(reason: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const lifecycle = new ApplicationLifecycle([databaseManager]);
   const app = await buildApp();
 
   // The HTTP process is independent from transient infrastructure reachability.
   // Readiness reflects dependency state; liveness remains available so an
   // orchestrator does not restart a process that can recover in place.
-  await lifecycle.start();
+  await applicationLifecycle.start();
 
   // Subscribed *after* the first attempt so a healthy boot registers once, not
   // twice — the initial 'connected' transition has already been published by
-  // the time we get here, and the explicit call below covers it.
+  // this point, and the explicit call below covers it.
   databaseManager.onLifecycleChange((status) => {
     if (status.state !== 'connected') return;
     void registerCatalogue('database-connected');
@@ -75,8 +73,11 @@ async function main(): Promise<void> {
     if (err) logger.error({ err }, 'shutting down after error');
     else logger.info({ signal }, 'shutting down');
 
+    // Stop accepting new HTTP work before tearing down infrastructure. The
+    // shared lifecycle owns every dependency, so future additions such as
+    // Redis/queues/storage automatically participate in graceful shutdown.
     await app.close();
-    await disconnectDatabase();
+    await applicationLifecycle.stop();
   });
 }
 
