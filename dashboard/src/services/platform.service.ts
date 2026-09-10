@@ -37,6 +37,25 @@ export interface PlanPayload {
   grants: FeatureGrant[];
 }
 
+export interface OrganizationUpdatePayload {
+  organizationName?: string;
+  slug?: string;
+  billingEmail?: string | null;
+  contactPhone?: string | null;
+  ownerName?: string;
+  ownerPhone?: string;
+  ownerEmail?: string | null;
+}
+
+export interface OrganizationUserUpdatePayload {
+  name?: string;
+  phone?: string;
+  email?: string | null;
+  designation?: string | null;
+  role?: string;
+  password?: string;
+}
+
 export const platformService = {
   // ─── Auth ───────────────────────────────────────────────────────────────────
   async login(email: string, password: string, totp?: string) {
@@ -101,6 +120,14 @@ export const platformService = {
     return data.data;
   },
 
+  async updateOrganization(id: string, payload: OrganizationUpdatePayload) {
+    const { data } = await api.patch<ApiSingle<OrganizationDetail>>(
+      `/organizations/${id}`,
+      payload
+    );
+    return data.data;
+  },
+
   async setOrganizationStatus(id: string, status: OrgStatus, reason?: string) {
     const { data } = await api.patch<ApiSingle<Organization>>(
       `/organizations/${id}/status`,
@@ -131,6 +158,18 @@ export const platformService = {
       params,
     });
     return data;
+  },
+
+  async updateOrganizationUser(
+    orgId: string,
+    userId: string,
+    payload: OrganizationUserUpdatePayload
+  ) {
+    const { data } = await api.patch<ApiSingle<TenantUser>>(
+      `/organizations/${orgId}/users/${userId}`,
+      payload
+    );
+    return data.data;
   },
 
   async setUserActive(orgId: string, userId: string, isActive: boolean) {
