@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { Field, Input, Select } from '@/components/ui/primitives';
 import type { PlanKey } from '@/types';
 import { useAssignablePlans } from '@/hooks/usePlans';
+import { DEFAULT_PHONE_COUNTRY, validatePhone } from '@/lib/phone';
 
 interface FormState {
   organizationName: string;
@@ -20,67 +21,37 @@ interface FormState {
   plan: PlanKey;
 }
 
-const EMPTY: FormState = {
-  organizationName: '',
-  slug: '',
-  ownerName: '',
-  ownerPhone: '',
-  ownerEmail: '',
-  ownerPassword: '',
-  // Filled from the catalogue once it loads — there is no longer a plan key
-  // this component can assume exists.
-  plan: '',
-};
+const EMPTY: FormState = { organizationName: '', slug: '', ownerName: '', ownerPhone: '', ownerEmail: '', ownerPassword: '', plan: '' };
 
-/** `Acme Realty Pvt. Ltd.` → `acme-realty-pvt-ltd`, mirroring the server. */
 function slugify(input: string): string {
-  return input
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 50);
+  return input.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50);
 }
 
-export function CreateOrgDialog({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
+export function CreateOrgDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [form, setForm] = useState<FormState>(EMPTY);
-  // Once the operator edits the handle by hand, stop overwriting it from the name.
   const [slugTouched, setSlugTouched] = useState(false);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-
   const { plans, isLoading: plansLoading } = useAssignablePlans();
   const selectedPlan = plans.find((p) => p.key === form.plan);
+  const phoneValidation = validatePhone(form.ownerPhone, DEFAULT_PHONE_COUNTRY);
 
-  // Default to the first assignable plan once the catalogue arrives. Done as an
-  // effect rather than in `EMPTY` because there is no plan key the client can
-  // assume exists — that assumption was the old hardcoded 'starter'.
   useEffect(() => {
-    if (!form.plan && plans.length > 0) {
-      setForm((prev) => (prev.plan ? prev : { ...prev, plan: plans[0]!.key }));
-    }
+    if (!form.plan && plans.length > 0) setForm((prev) => (prev.plan ? prev : { ...prev, plan: plans[0]!.key }));
   }, [plans, form.plan]);
 
   const mutation = useMutation({
-    mutationFn: () =>
-      platformService.createOrganization({
-        organizationName: form.organizationName,
-        slug: form.slug || undefined,
-        ownerName: form.ownerName,
-        ownerPhone: form.ownerPhone,
-        ownerEmail: form.ownerEmail,
-        ownerPassword: form.ownerPassword,
-        plan: form.plan,
-        // Provisioned tenants start active — a sales-led customer should not
-        // land in a trial that quietly expires on them.
-        status: 'active',
-      }),
+    mutationFn: () => platformService.createOrganization({
+      organizationName: form.organizationName.trim(),
+      slug: form.slug || undefined,
+      ownerName: form.ownerName.trim(),
+      ownerPhone: phoneValidation.e164!,
+      ownerEmail: form.ownerEmail.trim(),
+      ownerPassword: form.ownerPassword,
+      plan: form.plan,
+      status: 'active',
+      country: DEFAULT_PHONE_COUNTRY,
+    }),
     onSuccess: (result) => {
       toast.success(`${result.organization.name} provisioned`);
       void queryClient.invalidateQueries({ queryKey: ['platform', 'organizations'] });
@@ -101,157 +72,39 @@ export function CreateOrgDialog({
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => {
       const next = { ...prev, [key]: value };
-      if (key === 'organizationName' && !slugTouched) {
-        next.slug = slugify(String(value));
-      }
+      if (key === 'organizationName' && !slugTouched) next.slug = slugify(String(value));
       return next;
     });
   }
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (!phoneValidation.valid || !form.ownerEmail.trim() || form.ownerPassword.length < 8) return;
     mutation.mutate();
   }
 
+  const phoneError = form.ownerPhone ? phoneValidation.message : undefined;
+
   return (
-    <Dialog
-      open={open}
-      onClose={handleClose}
-      maxWidth="sm"
-      fullWidth
-      slotProps={{
-        paper: {
-          sx: {
-            bgcolor: 'var(--surface-raised)',
-            backgroundImage: 'none',
-            border: '1px solid var(--border)',
-            borderRadius: '12px',
-          },
-        },
-      }}
-    >
+    <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth slotProps={{ paper: { sx: { bgcolor: 'var(--surface-raised)', backgroundImage: 'none', border: '1px solid var(--border)', borderRadius: '12px' } } }}>
       <form onSubmit={handleSubmit} noValidate>
         <div className="border-b border-[var(--border)] px-5 py-4">
-          <h2 className="text-[15px] font-semibold text-[var(--text)]">
-            Provision a tenant
-          </h2>
-          <p className="mt-0.5 text-[13px] text-[var(--text-muted)]">
-            Creates the organization, its built-in roles and the owner account.
-          </p>
+          <h2 className="text-[15px] font-semibold text-[var(--text)]">Provision a tenant</h2>
+          <p className="mt-0.5 text-[13px] text-[var(--text-muted)]">Creates the organization, built-in roles and owner account.</p>
         </div>
-
         <div className="space-y-4 px-5 py-5">
-          <Field label="Organization name" htmlFor="orgName">
-            <Input
-              id="orgName"
-              required
-              autoFocus
-              value={form.organizationName}
-              onChange={(e) => update('organizationName', e.target.value)}
-              placeholder="Acme Realty"
-            />
-          </Field>
-
-          <Field
-            label="Handle"
-            htmlFor="slug"
-            hint="Lowercase letters, numbers and hyphens. Must be unique."
-          >
-            <Input
-              id="slug"
-              value={form.slug}
-              onChange={(e) => {
-                setSlugTouched(true);
-                update('slug', slugify(e.target.value));
-              }}
-              placeholder="acme-realty"
-              className="font-mono text-[13px]"
-            />
-          </Field>
-
+          <Field label="Organization name" htmlFor="orgName"><Input id="orgName" required autoFocus value={form.organizationName} onChange={(e) => update('organizationName', e.target.value)} placeholder="Acme Realty" /></Field>
+          <Field label="Handle" htmlFor="slug" hint="Lowercase letters, numbers and hyphens. Must be unique."><Input id="slug" value={form.slug} onChange={(e) => { setSlugTouched(true); update('slug', slugify(e.target.value)); }} placeholder="acme-realty" className="font-mono text-[13px]" /></Field>
           <div className="h-px bg-[var(--border)]" />
-
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="Owner name" htmlFor="ownerName">
-              <Input
-                id="ownerName"
-                required
-                value={form.ownerName}
-                onChange={(e) => update('ownerName', e.target.value)}
-                placeholder="Asha Sharma"
-              />
-            </Field>
-
-            <Field label="Owner phone" htmlFor="ownerPhone" hint="Used to sign in">
-              <Input
-                id="ownerPhone"
-                required
-                value={form.ownerPhone}
-                onChange={(e) => update('ownerPhone', e.target.value)}
-                placeholder="9000000001"
-              />
-            </Field>
+            <Field label="Owner name" htmlFor="ownerName"><Input id="ownerName" required value={form.ownerName} onChange={(e) => update('ownerName', e.target.value)} placeholder="Asha Sharma" /></Field>
+            <Field label="Owner phone" htmlFor="ownerPhone" error={phoneError} hint="Indian numbers are validated and normalized to E.164."><Input id="ownerPhone" required type="tel" value={form.ownerPhone} onChange={(e) => update('ownerPhone', e.target.value)} placeholder="+91 9876543210" autoComplete="tel" /></Field>
           </div>
-
-          <Field label="Owner email" htmlFor="ownerEmail">
-            <Input
-              id="ownerEmail"
-              type="email"
-              required
-              value={form.ownerEmail}
-              onChange={(e) => update('ownerEmail', e.target.value)}
-              placeholder="asha@acme.com"
-            />
-          </Field>
-
-          <Field
-            label="Temporary password"
-            htmlFor="ownerPassword"
-            hint="At least 8 characters. Share it over a channel you trust."
-          >
-            <Input
-              id="ownerPassword"
-              required
-              minLength={8}
-              value={form.ownerPassword}
-              onChange={(e) => update('ownerPassword', e.target.value)}
-              placeholder="••••••••"
-            />
-          </Field>
-
-          <Field
-            label="Plan"
-            htmlFor="plan"
-            hint={
-              selectedPlan?.trialDays
-                ? `Includes a ${selectedPlan.trialDays}-day trial.`
-                : undefined
-            }
-          >
-            <Select
-              id="plan"
-              value={form.plan}
-              disabled={plansLoading}
-              onChange={(e) => update('plan', e.target.value as PlanKey)}
-            >
-              {plansLoading && <option value="">Loading plans…</option>}
-              {plans.map((p) => (
-                <option key={p.key} value={p.key}>
-                  {p.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
+          <Field label="Owner email" htmlFor="ownerEmail"><Input id="ownerEmail" type="email" required value={form.ownerEmail} onChange={(e) => update('ownerEmail', e.target.value)} placeholder="asha@acme.com" /></Field>
+          <Field label="Temporary password" htmlFor="ownerPassword" hint="At least 8 characters."><Input id="ownerPassword" type="password" required minLength={8} value={form.ownerPassword} onChange={(e) => update('ownerPassword', e.target.value)} autoComplete="new-password" /></Field>
+          <Field label="Plan" htmlFor="plan" hint={selectedPlan?.trialDays ? `Includes a ${selectedPlan.trialDays}-day trial.` : undefined}><Select id="plan" value={form.plan} disabled={plansLoading} onChange={(e) => update('plan', e.target.value as PlanKey)}>{plansLoading && <option value="">Loading plans…</option>}{plans.map((p) => <option key={p.key} value={p.key}>{p.name}</option>)}</Select></Field>
         </div>
-
-        <div className="flex justify-end gap-2 border-t border-[var(--border)] px-5 py-4">
-          <Button type="button" variant="ghost" onClick={handleClose}>
-            Cancel
-          </Button>
-          <Button type="submit" loading={mutation.isPending}>
-            Provision
-          </Button>
-        </div>
+        <div className="flex justify-end gap-2 border-t border-[var(--border)] px-5 py-4"><Button type="button" variant="ghost" onClick={handleClose}>Cancel</Button><Button type="submit" loading={mutation.isPending} disabled={!form.organizationName.trim() || !form.ownerName.trim() || !phoneValidation.valid || !form.ownerEmail.trim() || form.ownerPassword.length < 8 || !form.plan}>Provision</Button></div>
       </form>
     </Dialog>
   );
