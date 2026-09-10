@@ -157,6 +157,20 @@ describe('DatabaseManager', () => {
       expect(manager.status().state).toBe('disconnected');
     });
 
+    it('dumps a full error once per outage window, not once per attempt', async () => {
+      connectMock.mockRejectedValue(new Error('ECONNREFUSED'));
+      const manager = await loadManager();
+
+      await manager.start();
+      await vi.advanceTimersByTimeAsync(25_000);
+
+      const fullDumps = loggerMock.error.mock.calls.filter(([fields]) => 'err' in Object(fields));
+      expect(fullDumps).toHaveLength(1);
+      // Later attempts are still reported, just compactly and at warn.
+      expect(connectMock.mock.calls.length).toBeGreaterThan(1);
+      expect(manager.status().consecutiveFailures).toBe(connectMock.mock.calls.length);
+    });
+
     it('never writes the connection string or its credentials to the log', async () => {
       connectMock.mockRejectedValue(new Error('ECONNREFUSED'));
       const manager = await loadManager();

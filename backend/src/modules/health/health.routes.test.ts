@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 
-const databaseStateMock = vi.fn<[], { ok: boolean; state: string }>();
+const databaseStateMock = vi.fn<() => { ok: boolean; state: string }>();
 
 vi.mock('../../config/database.js', () => ({
   databaseState: () => databaseStateMock(),

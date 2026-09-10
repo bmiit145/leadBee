@@ -11,8 +11,12 @@ export type DatabaseLifecycleListener = (status: DependencyStatus) => void;
 const INITIAL_RETRY_BASE_MS = 1_000;
 const INITIAL_RETRY_MAX_MS = 30_000;
 
-/** Floor between two `MongoDB error` lines, so an outage cannot flood the log. */
+/** Floor between two full error dumps, so an outage cannot flood the log. */
 const ERROR_LOG_INTERVAL_MS = 30_000;
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 /** `mongoose.connection.readyState` values this class cares about. */
 const READY_STATE = { disconnected: 0, connected: 1 } as const;
@@ -149,10 +153,7 @@ class DatabaseManager implements InfrastructureDependency {
     } catch (err) {
       this.consecutiveFailures += 1;
       this.markNotConnected();
-      logger.error(
-        { err, attempt: this.connectAttempt, consecutiveFailures: this.consecutiveFailures },
-        'MongoDB connection attempt failed'
-      );
+      this.logConnectFailure(err);
       this.scheduleRetry();
       return;
     }
@@ -213,7 +214,9 @@ class DatabaseManager implements InfrastructureDependency {
     });
 
     mongoose.connection.on('error', (err: unknown) => {
-      this.logConnectionError(err);
+      // Shares the gate with `logConnectFailure`: a failed connect emits both,
+      // describing one failure, and one full dump of it is enough.
+      if (this.shouldLogFullError()) logger.error({ err }, 'MongoDB error');
       if (this.stopping) return;
       // An error on a live connection is not automatically fatal — a single
       // failed operation does not mean the topology is gone. Trust readyState.
@@ -227,8 +230,11 @@ class DatabaseManager implements InfrastructureDependency {
         this.transition('disconnected');
         return;
       }
-      this.markNotConnected();
-      logger.warn('MongoDB disconnected; awaiting driver recovery');
+      const changed = this.markNotConnected();
+      // Only once a connection has existed, which is the case where the driver's
+      // topology monitor owns recovery. A failed *initial* attempt also emits
+      // this event, and `logConnectFailure` already reports that far better.
+      if (changed && this.everConnected) logger.warn('MongoDB disconnected; awaiting driver recovery');
       this.scheduleRetry();
     });
   }
@@ -250,20 +256,35 @@ class DatabaseManager implements InfrastructureDependency {
   /**
    * Not connected. Reported as 'degraded' once a connection has existed, since
    * the driver is actively recovering it, and as 'disconnected' before that.
-   * Either way readiness is false.
+   * Either way readiness is false. Returns whether the state actually changed.
    */
-  private markNotConnected(): void {
+  private markNotConnected(): boolean {
     const next: DependencyState = this.everConnected ? 'degraded' : 'disconnected';
-    if (this.state === next) return;
+    if (this.state === next) return false;
     this.lastDisconnectedAt = new Date().toISOString();
     this.transition(next);
+    return true;
   }
 
-  private logConnectionError(err: unknown): void {
+  private logConnectFailure(err: unknown): void {
+    const context = { attempt: this.connectAttempt, consecutiveFailures: this.consecutiveFailures };
+
+    if (this.shouldLogFullError()) {
+      logger.error({ err, ...context }, 'MongoDB connection attempt failed');
+      return;
+    }
+
+    // A retry failing the same way is expected-but-notable during an outage, so
+    // `warn` per ENG-14 — and one line, not another full topology dump.
+    logger.warn({ ...context, reason: errorMessage(err) }, 'MongoDB connection attempt failed');
+  }
+
+  /** True at most once per interval, so a prolonged outage cannot flood the log. */
+  private shouldLogFullError(): boolean {
     const now = Date.now();
-    if (now - this.lastErrorLoggedAt < ERROR_LOG_INTERVAL_MS) return;
+    if (now - this.lastErrorLoggedAt < ERROR_LOG_INTERVAL_MS) return false;
     this.lastErrorLoggedAt = now;
-    logger.error({ err }, 'MongoDB error');
+    return true;
   }
 
   private transition(next: DependencyState): void {
