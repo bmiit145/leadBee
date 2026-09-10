@@ -6,6 +6,7 @@ import { Role } from '../../models/Role.js';
 import { Organization } from '../../models/Organization.js';
 import { organizationService } from '../organizations/organization.service.js';
 import { AppError } from '../../lib/errors.js';
+import { mobilePhoneSchema } from '../../lib/phone.js';
 import { pageParams } from '../../lib/pagination.js';
 import {
   booleanQuery,
@@ -25,7 +26,7 @@ const security = [{ tenantToken: [] }];
 
 const createUserBody = z.object({
   name: z.string().trim().min(2).max(80),
-  phone: z.string().trim().min(6).max(20),
+  phone: mobilePhoneSchema,
   email: z.string().email().optional(),
   password: z.string().min(6, 'Password must be at least 6 characters'),
   role: z.enum(ROLE_ORDER as [string, ...string[]]).default(ROLES.USER),

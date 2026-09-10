@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { z } from 'zod';
+import { isSupportedCountry, type CountryCode } from 'libphonenumber-js/max';
 
 /**
  * Env is parsed once, at boot, and the process refuses to start if anything is
@@ -25,6 +26,20 @@ const envSchema = z.object({
     .string()
     .default('false')
     .transform((v) => v === 'true'),
+
+  /**
+   * Region a phone number typed without a country code is assumed to belong to.
+   * Which country LeadBee sells into is a business fact, not an engineering one,
+   * so it is configuration rather than a constant in the validator.
+   */
+  DEFAULT_PHONE_REGION: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .refine((value): value is CountryCode => isSupportedCountry(value), {
+      message: 'Must be a supported ISO 3166-1 alpha-2 country code, e.g. IN',
+    })
+    .default('IN'),
 
   JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
   JWT_REFRESH_SECRET: z.string().min(32, 'JWT_REFRESH_SECRET must be at least 32 characters'),

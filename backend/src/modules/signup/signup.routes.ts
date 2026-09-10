@@ -6,6 +6,7 @@ import { authService } from '../auth/auth.service.js';
 import { commonErrors, okEnvelope } from '../../lib/schemas.js';
 import { ok } from '../../lib/response.js';
 import { AppError } from '../../lib/errors.js';
+import { mobilePhoneSchema } from '../../lib/phone.js';
 import { env } from '../../config/env.js';
 
 const signupBody = z.object({
@@ -18,7 +19,7 @@ const signupBody = z.object({
     .regex(/^[a-z0-9-]+$/, 'Use lowercase letters, numbers and hyphens only')
     .optional(),
   ownerName: z.string().trim().min(2, 'Your name is required').max(80),
-  ownerPhone: z.string().trim().min(6, 'A valid phone number is required').max(20),
+  ownerPhone: mobilePhoneSchema,
   ownerEmail: z.string().email('A valid email is required'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
 });

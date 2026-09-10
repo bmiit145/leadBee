@@ -6,6 +6,7 @@ import { platformService, recordPlatformAction } from './platform.service.js';
 import { organizationService } from '../organizations/organization.service.js';
 import { Organization } from '../../models/Organization.js';
 import { AppError } from '../../lib/errors.js';
+import { mobilePhoneSchema } from '../../lib/phone.js';
 import {
   commonErrors,
   idParam,
@@ -219,7 +220,7 @@ export async function platformRoutes(app: FastifyInstance): Promise<void> {
           organizationName: z.string().trim().min(2).max(120),
           slug: z.string().trim().min(3).max(50).regex(/^[a-z0-9-]+$/).optional(),
           ownerName: z.string().trim().min(2).max(80),
-          ownerPhone: z.string().trim().min(6).max(20),
+          ownerPhone: mobilePhoneSchema,
           ownerEmail: z.string().email(),
           ownerPassword: z.string().min(8),
           plan: planKeySchema.optional(),

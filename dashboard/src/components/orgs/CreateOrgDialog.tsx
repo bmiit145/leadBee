@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { Field, Input, Select } from '@/components/ui/primitives';
 import type { PlanKey } from '@/types';
 import { useAssignablePlans } from '@/hooks/usePlans';
+import { isValidMobilePhone, mobilePhoneError } from '@/lib/phone';
 
 interface FormState {
   organizationName: string;
@@ -52,6 +53,9 @@ export function CreateOrgDialog({
   const [form, setForm] = useState<FormState>(EMPTY);
   // Once the operator edits the handle by hand, stop overwriting it from the name.
   const [slugTouched, setSlugTouched] = useState(false);
+  // Errors are shown once the operator has left the field or tried to submit,
+  // so a number is not marked wrong while it is still being typed.
+  const [phoneTouched, setPhoneTouched] = useState(false);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
@@ -94,6 +98,7 @@ export function CreateOrgDialog({
   function handleClose() {
     setForm(EMPTY);
     setSlugTouched(false);
+    setPhoneTouched(false);
     mutation.reset();
     onClose();
   }
@@ -110,6 +115,15 @@ export function CreateOrgDialog({
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
+
+    // The form is `noValidate`, so nothing else stops a submit. Without this the
+    // owner phone reaches the API unchecked — which is how a nine-digit number
+    // was provisioned as an owner who could then never sign in.
+    if (!isValidMobilePhone(form.ownerPhone)) {
+      setPhoneTouched(true);
+      return;
+    }
+
     mutation.mutate();
   }
 
@@ -182,12 +196,21 @@ export function CreateOrgDialog({
               />
             </Field>
 
-            <Field label="Owner phone" htmlFor="ownerPhone" hint="Used to sign in">
+            <Field
+              label="Owner phone"
+              htmlFor="ownerPhone"
+              hint="Used to sign in"
+              error={phoneTouched ? mobilePhoneError(form.ownerPhone) : undefined}
+            >
               <Input
                 id="ownerPhone"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
                 required
                 value={form.ownerPhone}
                 onChange={(e) => update('ownerPhone', e.target.value)}
+                onBlur={() => setPhoneTouched(true)}
                 placeholder="9000000001"
               />
             </Field>

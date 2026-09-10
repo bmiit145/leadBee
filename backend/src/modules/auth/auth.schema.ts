@@ -1,11 +1,12 @@
 import { z } from 'zod';
+import { loginPhoneSchema } from '../../lib/phone.js';
 
 export const objectId = z
   .string()
   .regex(/^[a-f\d]{24}$/i, 'Invalid id');
 
 export const loginBody = z.object({
-  phone: z.string().trim().min(1, 'Phone is required'),
+  phone: loginPhoneSchema,
   password: z.string().min(1, 'Password is required'),
   /**
    * Only needed when the same phone belongs to more than one organization. The

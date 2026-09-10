@@ -7,13 +7,15 @@ import {
 } from '../../config/constants.js';
 import { LEAD_THREAD_CHANNELS } from '../../models/LeadThreadItem.js';
 import { booleanQuery, objectIdSchema, paginationQuery } from '../../lib/schemas.js';
+import { contactPhoneSchema } from '../../lib/phone.js';
 
 const optionalText = z.string().trim().optional();
 
 export const createLeadBody = z.object({
   contactName: z.string().trim().min(1, 'Contact name is required'),
-  contactPhone: z.string().trim().min(1, 'Contact phone is required'),
-  contactSecondPhone: optionalText,
+  contactPhone: contactPhoneSchema,
+  // Optional, but an empty string is how the mobile form sends "not provided".
+  contactSecondPhone: contactPhoneSchema.optional().or(z.literal('')),
   contactEmail: z.string().email('Invalid email').optional().or(z.literal('')),
   source: z.enum(LEAD_SOURCE_ORDER as [string, ...string[]]).optional(),
   sourceDetail: optionalText,

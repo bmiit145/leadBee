@@ -24,6 +24,7 @@ import { useAuth } from '../../src/stores/auth.store';
 import { LeadSource, LeadPriority, LeadStage } from '../../src/types';
 import { colors, spacing, borderRadius } from '../../src/theme';
 import { LEAD_STAGE_META, LEAD_STAGE_ORDER } from '../../src/config/leadStages';
+import { isValidPhone } from '../../src/utils/validators';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -590,6 +591,11 @@ export default function AddLeadScreen() {
   const validate = (): string | null => {
     if (!form.contactName.trim()) return 'Contact name is required.';
     if (!form.contactPhone.trim()) return 'Contact phone is required.';
+    // A landline or a foreign number is a legitimate lead contact, so this only
+    // rejects what is not a phone number at all — matching the API's rule.
+    if (!isValidPhone(form.contactPhone)) return 'Enter a valid contact phone number.';
+    if (form.contactSecondPhone.trim() && !isValidPhone(form.contactSecondPhone))
+      return 'Enter a valid alternate phone number.';
     if (form.contactEmail.trim() && !/\S+@\S+\.\S+/.test(form.contactEmail))
       return 'Invalid email address.';
     if (form.estimateAmount && isNaN(Number(form.estimateAmount)))
