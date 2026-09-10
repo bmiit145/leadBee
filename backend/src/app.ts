@@ -28,6 +28,7 @@ import { userRoutes } from './modules/users/user.routes.js';
 import { roleRoutes } from './modules/roles/role.routes.js';
 import { lookupRoutes } from './modules/lookups/lookup.routes.js';
 import { platformRoutes } from './modules/platform/platform.routes.js';
+import { platformProfileRoutes } from './modules/platform/platformProfile.routes.js';
 import { catalogRoutes } from './modules/platform/catalog.routes.js';
 
 export const API_PREFIX = '/api/v1';
@@ -78,6 +79,7 @@ export async function buildApp() {
 
   // Control plane. Separate token realm — see lib/tokens.ts.
   await app.register(platformRoutes, { prefix: `${API_PREFIX}/platform` });
+  await app.register(platformProfileRoutes, { prefix: `${API_PREFIX}/platform` });
   // Plan catalogue administration — same realm, same prefix.
   await app.register(catalogRoutes, { prefix: `${API_PREFIX}/platform` });
 
