@@ -56,6 +56,9 @@ importers:
       jsonwebtoken:
         specifier: ^9.0.3
         version: 9.0.3
+      mongodb:
+        specifier: ~6.20.0
+        version: 6.20.0
       mongoose:
         specifier: ^8.24.4
         version: 8.24.4

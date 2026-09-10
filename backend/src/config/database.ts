@@ -1,83 +1,39 @@
-import mongoose from 'mongoose';
-import { env } from './env.js';
-import { logger } from '../lib/logger.js';
+import { databaseManager } from '../infrastructure/database/database.manager.js';
+import type { DependencyStatus } from '../infrastructure/dependency.types.js';
 
 /**
- * Connection settings tuned for a shared multi-tenant cluster.
+ * Opens the shared connection for a one-shot script — seed, catalogue seed,
+ * index sync, smoke test.
  *
- * The pool is sized generously because every request does at least one read and
- * tenants are not coordinated — bursts overlap. `maxTimeMS` on the driver keeps a
- * single pathological query from holding a connection forever and starving the
- * rest of the pool, which is how one tenant takes down everyone else.
+ * The API server does *not* use this. It goes through `ApplicationLifecycle`,
+ * where an unreachable database is survivable and worth waiting out. A script
+ * has nothing to do without one, so this fails fast and says why, rather than
+ * letting every subsequent query die on a buffering timeout several seconds
+ * later with a much less obvious message.
  */
 export async function connectDatabase(): Promise<void> {
-  mongoose.set('strictQuery', true);
+  await databaseManager.start();
 
-  // A populate() that quietly fires N queries per row is the usual cause of a
-  // slow list endpoint. Opt in with MONGO_DEBUG=true when chasing one — it is
-  // not on by default because the hook is synchronous and per-operation, so it
-  // distorts the very timings it is meant to explain.
-  if (env.MONGO_DEBUG) {
-    mongoose.set('debug', (collection: string, method: string, query: unknown) => {
-      logger.debug({ collection, method, query }, 'mongo');
-    });
-  }
+  const status = databaseManager.status();
+  if (status.ready) return;
 
-  mongoose.connection.on('connected', () => logger.info('MongoDB connected'));
-  mongoose.connection.on('error', (err) => logger.error({ err }, 'MongoDB error'));
-  mongoose.connection.on('disconnected', () => logger.warn('MongoDB disconnected'));
-
-  /**
-   * Index building is a deploy-time operation, not a boot-time one — it runs
-   * from `npm run sync-indexes`, in every environment.
-   *
-   * This must be set BEFORE connect(): Mongoose kicks off index builds for
-   * already-registered models as soon as the connection opens, so setting it
-   * afterwards races the behaviour it is meant to control.
-   *
-   * It stays off in development too. Building every index on boot floods the
-   * event loop for several seconds, during which load shedding rejects each
-   * incoming request with a 503 — a failure that looks like a broken API and
-   * has nothing to do with the code under test. Development matching production
-   * is worth more here than the convenience of implicit index creation.
-   */
-  mongoose.set('autoIndex', false);
-
-  await mongoose.connect(env.MONGODB_URI, {
-    maxPoolSize: env.MONGODB_MAX_POOL_SIZE,
-    minPoolSize: env.MONGODB_MIN_POOL_SIZE,
-    serverSelectionTimeoutMS: 10_000,
-    socketTimeoutMS: 45_000,
-    // Reads that can tolerate a moment of staleness should be routed off the
-    // primary once there are secondaries; the default stays primary so that
-    // read-your-own-write behaviour is not surprising.
-    retryWrites: true,
-    retryReads: true,
-  });
+  // Cancels the pending reconnect too, so the script exits promptly.
+  await databaseManager.stop();
+  throw new Error(`MongoDB is not reachable — connection state: ${status.state}`);
 }
 
 export async function disconnectDatabase(): Promise<void> {
-  await mongoose.connection.close(false);
-  logger.info('MongoDB connection closed');
+  await databaseManager.stop();
 }
 
 /**
- * Health probe for `/health`. Reports the driver's view rather than issuing a
- * ping, so a health check never adds load during an incident.
+ * Health probe for `/health/ready`. Reports the manager's cached view rather
+ * than issuing a ping, so a health check never adds load during an incident.
  */
 export function databaseState(): { ok: boolean; state: string } {
-  // A Record rather than a tuple: the driver also reports 99 ("uninitialized"),
-  // which a fixed-length tuple has no slot for.
-  const states: Record<number, string> = {
-    0: 'disconnected',
-    1: 'connected',
-    2: 'connecting',
-    3: 'disconnecting',
-    99: 'uninitialized',
-  };
-  const readyState = mongoose.connection.readyState;
+  const status: DependencyStatus = databaseManager.status();
   return {
-    ok: readyState === 1,
-    state: states[readyState] ?? 'unknown',
+    ok: status.ready,
+    state: status.state,
   };
 }
