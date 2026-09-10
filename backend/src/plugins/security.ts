@@ -6,6 +6,7 @@ import compress from '@fastify/compress';
 import rateLimit from '@fastify/rate-limit';
 import underPressure from '@fastify/under-pressure';
 import { env } from '../config/env.js';
+import { AppError } from '../lib/errors.js';
 
 export const securityPlugin = fp(async function securityPlugin(app: FastifyInstance) {
   await app.register(helmet, {
@@ -54,15 +55,24 @@ export const securityPlugin = fp(async function securityPlugin(app: FastifyInsta
       if (platformAuth) return `p:${platformAuth.adminId.toString()}`;
       return `ip:${request.ip}`;
     },
-    errorResponseBuilder(request, context) {
-      return {
-        success: false,
-        error: {
-          code: 'RATE_LIMITED',
-          message: `Too many requests. Retry in ${context.after}.`,
-        },
-        requestId: request.id,
-      };
+    /**
+     * Returns an `AppError`, not a response body.
+     *
+     * `@fastify/rate-limit` **throws** whatever this returns
+     * (`throw params.errorResponseBuilder(req, respCtx)`), so returning a plain
+     * object sent a non-Error into the error handler: it matched no branch,
+     * fell through to `String(error)` — literally `"[object Object]"` — and,
+     * having no numeric `statusCode`, was reported as **500** rather than 429.
+     *
+     * Every rate-limited request looked like a server fault, which is the one
+     * failure mode a rate limiter must not have: it hides the throttling from
+     * the caller and buries a real 500 in the noise.
+     *
+     * `AppError` is the first branch `translate()` handles, so this produces the
+     * intended `RATE_LIMITED` / 429 envelope with the request id attached.
+     */
+    errorResponseBuilder(_request, context) {
+      return AppError.tooManyRequests(`Too many requests. Retry in ${context.after}.`);
     },
   });
 
