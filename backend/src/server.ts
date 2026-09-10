@@ -8,14 +8,41 @@ import { logger } from './lib/logger.js';
 import { registerModuleManifests } from './entitlements/registry.js';
 import './models/index.js';
 
-async function registerCatalogueIfReady(): Promise<void> {
-  if (!databaseManager.status().ready) return;
+let catalogueRun: Promise<void> | null = null;
 
-  try {
-    await registerModuleManifests();
-  } catch (err) {
-    logger.error({ err }, 'entitlement catalogue registration failed');
+/**
+ * Registers the entitlement catalogue, if the database is reachable.
+ *
+ * `registerModuleManifests()` is already idempotent and safe to run
+ * concurrently across instances — every instance upserts the same values. This
+ * guard is narrower and process-local on purpose: it stops a flapping
+ * connection from stacking redundant registration jobs inside *this* process.
+ * It is not, and must not be mistaken for, a distributed lock.
+ */
+async function registerCatalogue(reason: string): Promise<void> {
+  if (!databaseManager.status().ready) {
+    logger.warn({ reason }, 'entitlement catalogue registration deferred — database unavailable');
+    return;
   }
+
+  if (catalogueRun) {
+    logger.debug({ reason }, 'entitlement catalogue registration already in flight');
+    return catalogueRun;
+  }
+
+  catalogueRun = (async () => {
+    try {
+      await registerModuleManifests();
+    } catch (err) {
+      // Never fatal. The next 'connected' transition retries it, and an
+      // instance running against an already-registered catalogue is fine.
+      logger.error({ err, reason }, 'entitlement catalogue registration failed');
+    }
+  })().finally(() => {
+    catalogueRun = null;
+  });
+
+  return catalogueRun;
 }
 
 async function main(): Promise<void> {
@@ -25,14 +52,17 @@ async function main(): Promise<void> {
   // The HTTP process is independent from transient infrastructure reachability.
   // Readiness reflects dependency state; liveness remains available so an
   // orchestrator does not restart a process that can recover in place.
+  await lifecycle.start();
+
+  // Subscribed *after* the first attempt so a healthy boot registers once, not
+  // twice — the initial 'connected' transition has already been published by
+  // the time we get here, and the explicit call below covers it.
   databaseManager.onLifecycleChange((status) => {
-    if (status.state === 'connected') {
-      void registerCatalogueIfReady();
-    }
+    if (status.state !== 'connected') return;
+    void registerCatalogue('database-connected');
   });
 
-  await lifecycle.start();
-  await registerCatalogueIfReady();
+  await registerCatalogue('startup');
 
   await app.listen({ port: env.PORT, host: env.HOST });
 

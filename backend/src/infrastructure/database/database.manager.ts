@@ -6,8 +6,46 @@ import type { DependencyStatus, DependencyState, InfrastructureDependency } from
 export type DatabaseLifecycleListener = (status: DependencyStatus) => void;
 
 /**
- * Owns MongoDB lifecycle state while leaving actual connection recovery to
- * Mongoose/MongoDB driver's topology management.
+ * Backoff bounds for the *initial* connection only — see `scheduleRetry()`.
+ */
+const INITIAL_RETRY_BASE_MS = 1_000;
+const INITIAL_RETRY_MAX_MS = 30_000;
+
+/** Floor between two `MongoDB error` lines, so an outage cannot flood the log. */
+const ERROR_LOG_INTERVAL_MS = 30_000;
+
+/** `mongoose.connection.readyState` values this class cares about. */
+const READY_STATE = { disconnected: 0, connected: 1 } as const;
+
+function backoffDelay(attempt: number): number {
+  const ceiling = Math.min(INITIAL_RETRY_BASE_MS * 2 ** Math.max(attempt - 1, 0), INITIAL_RETRY_MAX_MS);
+  // Half jitter. Every instance loses Mongo at the same moment and would
+  // otherwise retry in lockstep, hammering the cluster exactly as it recovers.
+  return Math.round(ceiling / 2 + Math.random() * (ceiling / 2));
+}
+
+/**
+ * Host and database only. The URI carries credentials, so it is never logged.
+ */
+function safeTarget(uri: string): string {
+  try {
+    const url = new URL(uri);
+    return `${url.host}${url.pathname}`;
+  } catch {
+    return 'unparseable-uri';
+  }
+}
+
+/**
+ * Owns MongoDB configuration, connection lifecycle state and readiness.
+ *
+ * **Division of responsibility with the driver.** Once a connection has been
+ * established the driver's topology monitor owns recovery: it reconnects on its
+ * own and Mongoose re-emits `connected`, so this class only observes. The
+ * initial connect is the exception — `Connection.prototype.openUri()` rejects,
+ * sets `readyState` to disconnected and never retries, leaving the process
+ * permanently unusable — so a bounded, jittered retry runs until the first
+ * successful connect and then stands down for good.
  */
 class DatabaseManager implements InfrastructureDependency {
   private state: DependencyState = 'uninitialized';
@@ -15,52 +53,43 @@ class DatabaseManager implements InfrastructureDependency {
   private lastDisconnectedAt: string | null = null;
   private consecutiveFailures = 0;
   private listenersBound = false;
+  private everConnected = false;
+  private stopping = false;
+  private connectAttempt = 0;
+  private retryTimer: NodeJS.Timeout | null = null;
+  private lastErrorLoggedAt = 0;
   private readonly lifecycleListeners = new Set<DatabaseLifecycleListener>();
 
+  /**
+   * Resolves once the first connection attempt has been made — successful or
+   * not. A failure is deliberately not rethrown: the API process stays up and
+   * serves liveness while readiness reports the outage.
+   */
   async start(): Promise<void> {
+    this.stopping = false;
     this.configure();
     this.bindListeners();
-
-    if (mongoose.connection.readyState === 1) {
-      this.markConnected();
-      return;
-    }
-
-    this.state = 'connecting';
-    this.publish();
-
-    try {
-      await mongoose.connect(env.MONGODB_URI, {
-        maxPoolSize: env.MONGODB_MAX_POOL_SIZE,
-        minPoolSize: env.MONGODB_MIN_POOL_SIZE,
-        serverSelectionTimeoutMS: 10_000,
-        socketTimeoutMS: 45_000,
-        retryWrites: true,
-        retryReads: true,
-      });
-      // The driver's `connected` event also calls markConnected(). Do not emit
-      // a second lifecycle transition here when that event has already fired.
-      if (this.state !== 'connected') this.markConnected();
-    } catch (err) {
-      this.markDisconnected(err);
-      // Do not throw transient infrastructure failure back through application
-      // bootstrap. The driver remains responsible for topology recovery.
-    }
+    await this.attemptConnect();
   }
 
   async stop(): Promise<void> {
-    if (mongoose.connection.readyState === 0) {
-      this.state = 'disconnected';
-      this.publish();
+    this.stopping = true;
+    this.clearRetry();
+
+    if (this.isDriverDisconnected()) {
+      this.transition('disconnected');
       return;
     }
 
-    this.state = 'disconnecting';
-    this.publish();
-    await mongoose.connection.close(false);
-    this.state = 'disconnected';
-    this.publish();
-    logger.info('MongoDB connection closed');
+    this.transition('disconnecting');
+    try {
+      await mongoose.connection.close(false);
+      logger.info('MongoDB connection closed');
+    } finally {
+      // Report the terminal state even if close() rejected. The caller logs the
+      // failure; a status stuck on 'disconnecting' would help nobody.
+      this.transition('disconnected');
+    }
   }
 
   status(): DependencyStatus {
@@ -76,7 +105,92 @@ class DatabaseManager implements InfrastructureDependency {
 
   onLifecycleChange(listener: DatabaseLifecycleListener): () => void {
     this.lifecycleListeners.add(listener);
-    return () => this.lifecycleListeners.delete(listener);
+    return () => {
+      this.lifecycleListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Read fresh on every call. The driver mutates `readyState` asynchronously,
+   * so a value observed before an `await` says nothing about the state after it.
+   */
+  private isDriverConnected(): boolean {
+    return mongoose.connection.readyState === READY_STATE.connected;
+  }
+
+  private isDriverDisconnected(): boolean {
+    return mongoose.connection.readyState === READY_STATE.disconnected;
+  }
+
+  private async attemptConnect(): Promise<void> {
+    if (this.stopping) return;
+
+    if (this.isDriverConnected()) {
+      this.markConnected();
+      return;
+    }
+
+    this.connectAttempt += 1;
+    this.transition('connecting');
+    logger.info(
+      { target: safeTarget(env.MONGODB_URI), attempt: this.connectAttempt },
+      'MongoDB connection attempt'
+    );
+
+    try {
+      await mongoose.connect(env.MONGODB_URI, {
+        maxPoolSize: env.MONGODB_MAX_POOL_SIZE,
+        minPoolSize: env.MONGODB_MIN_POOL_SIZE,
+        serverSelectionTimeoutMS: 10_000,
+        socketTimeoutMS: 45_000,
+        retryWrites: true,
+        retryReads: true,
+      });
+    } catch (err) {
+      this.consecutiveFailures += 1;
+      this.markNotConnected();
+      logger.error(
+        { err, attempt: this.connectAttempt, consecutiveFailures: this.consecutiveFailures },
+        'MongoDB connection attempt failed'
+      );
+      this.scheduleRetry();
+      return;
+    }
+
+    // `connect()` resolving is not on its own proof of a usable connection —
+    // only `readyState` is. The driver's `connected` event normally lands first,
+    // in which case `transition()` collapses this into a no-op.
+    if (this.isDriverConnected()) this.markConnected();
+    else this.scheduleRetry();
+  }
+
+  /**
+   * Queues one retry of the *initial* connect. No-op once a connection has
+   * existed: from that point the driver's topology monitor is doing this job,
+   * and a second loop competing with it would only multiply connection churn.
+   */
+  private scheduleRetry(): void {
+    if (this.everConnected || this.stopping) return;
+    if (this.retryTimer) return;
+    // A non-disconnected readyState means a connect is still in flight; it will
+    // resolve into `connected` or into the error handler, which reschedules.
+    if (!this.isDriverDisconnected()) return;
+
+    const delayMs = backoffDelay(this.connectAttempt);
+    logger.warn({ delayMs, attempt: this.connectAttempt }, 'retrying MongoDB connection');
+
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      void this.attemptConnect();
+    }, delayMs);
+    // A pending retry must never be the reason the process refuses to exit.
+    this.retryTimer.unref();
+  }
+
+  private clearRetry(): void {
+    if (!this.retryTimer) return;
+    clearTimeout(this.retryTimer);
+    this.retryTimer = null;
   }
 
   private configure(): void {
@@ -94,32 +208,68 @@ class DatabaseManager implements InfrastructureDependency {
     if (this.listenersBound) return;
     this.listenersBound = true;
 
-    mongoose.connection.on('connected', () => this.markConnected());
-    mongoose.connection.on('error', (err) => {
-      this.state = 'degraded';
-      this.publish();
-      logger.error({ err }, 'MongoDB error');
+    mongoose.connection.on('connected', () => {
+      this.markConnected();
     });
+
+    mongoose.connection.on('error', (err: unknown) => {
+      this.logConnectionError(err);
+      if (this.stopping) return;
+      // An error on a live connection is not automatically fatal — a single
+      // failed operation does not mean the topology is gone. Trust readyState.
+      if (this.isDriverConnected()) return;
+      this.markNotConnected();
+      this.scheduleRetry();
+    });
+
     mongoose.connection.on('disconnected', () => {
-      this.markDisconnected();
-      logger.warn('MongoDB disconnected; waiting for driver recovery');
+      if (this.stopping) {
+        this.transition('disconnected');
+        return;
+      }
+      this.markNotConnected();
+      logger.warn('MongoDB disconnected; awaiting driver recovery');
+      this.scheduleRetry();
     });
   }
 
   private markConnected(): void {
-    this.state = 'connected';
+    this.clearRetry();
+    const recovered = this.everConnected;
+    this.everConnected = true;
     this.consecutiveFailures = 0;
+    this.connectAttempt = 0;
+
+    if (this.state === 'connected') return;
     this.lastConnectedAt = new Date().toISOString();
+    this.state = 'connected';
     this.publish();
-    logger.info('MongoDB connected');
+    logger.info(recovered ? 'MongoDB recovery complete' : 'MongoDB connected');
   }
 
-  private markDisconnected(err?: unknown): void {
-    this.state = 'disconnected';
-    this.consecutiveFailures += 1;
+  /**
+   * Not connected. Reported as 'degraded' once a connection has existed, since
+   * the driver is actively recovering it, and as 'disconnected' before that.
+   * Either way readiness is false.
+   */
+  private markNotConnected(): void {
+    const next: DependencyState = this.everConnected ? 'degraded' : 'disconnected';
+    if (this.state === next) return;
     this.lastDisconnectedAt = new Date().toISOString();
+    this.transition(next);
+  }
+
+  private logConnectionError(err: unknown): void {
+    const now = Date.now();
+    if (now - this.lastErrorLoggedAt < ERROR_LOG_INTERVAL_MS) return;
+    this.lastErrorLoggedAt = now;
+    logger.error({ err }, 'MongoDB error');
+  }
+
+  private transition(next: DependencyState): void {
+    if (this.state === next) return;
+    this.state = next;
     this.publish();
-    if (err) logger.error({ err, consecutiveFailures: this.consecutiveFailures }, 'MongoDB initial connection failed');
   }
 
   private publish(): void {
@@ -128,6 +278,7 @@ class DatabaseManager implements InfrastructureDependency {
       try {
         listener(status);
       } catch (err) {
+        // A misbehaving observer must not break the lifecycle it observes.
         logger.error({ err }, 'database lifecycle listener failed');
       }
     }
