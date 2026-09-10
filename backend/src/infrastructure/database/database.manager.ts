@@ -27,6 +27,7 @@ class DatabaseManager implements InfrastructureDependency {
     }
 
     this.state = 'connecting';
+    this.publish();
 
     try {
       await mongoose.connect(env.MONGODB_URI, {
@@ -37,8 +38,9 @@ class DatabaseManager implements InfrastructureDependency {
         retryWrites: true,
         retryReads: true,
       });
-
-      this.markConnected();
+      // The driver's `connected` event also calls markConnected(). Do not emit
+      // a second lifecycle transition here when that event has already fired.
+      if (this.state !== 'connected') this.markConnected();
     } catch (err) {
       this.markDisconnected(err);
       // Do not throw transient infrastructure failure back through application
@@ -54,6 +56,7 @@ class DatabaseManager implements InfrastructureDependency {
     }
 
     this.state = 'disconnecting';
+    this.publish();
     await mongoose.connection.close(false);
     this.state = 'disconnected';
     this.publish();
