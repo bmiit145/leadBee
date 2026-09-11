@@ -8,6 +8,11 @@ export const queryKeys = {
     thread: (id: string, channel: string) => ['lead-thread', id, channel] as const,
     documents: (id: string, kind: string) => ['lead-documents', id, kind] as const,
   },
+  /** Every file across leads — the drawer's Document screen. */
+  documentLibrary: {
+    all: ['document-library'] as const,
+    list: (kind: string, search: string) => ['document-library', kind, search] as const,
+  },
   quickReplies: {
     all: ['quick-replies'] as const,
     list: (search: string) => ['quick-replies', search] as const,
@@ -26,10 +31,19 @@ export const queryKeys = {
   lookups: {
     projects: ['projects'] as const,
     purposes: ['purposes'] as const,
+    dropReasons: ['drop-reasons'] as const,
     enums: ['meta-enums'] as const,
   },
   users: {
     all: ['users'] as const,
     list: (search: string) => ['users', search] as const,
+    /** Active members for pickers and filters. Nested under `users`, so adding
+     *  or deactivating a member refreshes every picker too. */
+    members: ['users', 'members'] as const,
+    detail: (id: string) => ['users', 'detail', id] as const,
+  },
+  notifications: {
+    all: ['notifications'] as const,
+    unreadCount: ['notifications', 'unread-count'] as const,
   },
 };

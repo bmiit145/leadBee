@@ -3,6 +3,7 @@ import { Organization, type IOrganization } from '../../models/Organization.js';
 import { User, type IUser } from '../../models/User.js';
 import { Role } from '../../models/Role.js';
 import { PurposeOfInquiry } from '../../models/PurposeOfInquiry.js';
+import { LeadDropReason } from '../../models/LeadDropReason.js';
 import { AppError } from '../../lib/errors.js';
 import { logger } from '../../lib/logger.js';
 import { runInTenantScope, withoutTenantScope } from '../../lib/tenantContext.js';
@@ -48,6 +49,15 @@ const STARTER_PURPOSES = [
   'Price Negotiation',
   'Documentation',
   'Follow-up',
+];
+
+/** Default drop tags, for the same reason. Organizers rename or retire them freely. */
+const STARTER_DROP_REASONS = [
+  'Not interested',
+  'Budget mismatch',
+  'Bought elsewhere',
+  'Not reachable',
+  'Duplicate lead',
 ];
 
 export const organizationService = {
@@ -308,6 +318,16 @@ async function provisionTransactionally(
             { session }
           );
 
+          await LeadDropReason.insertMany(
+            STARTER_DROP_REASONS.map((name, index) => ({
+              organizationId: organization!._id,
+              name,
+              createdBy: owner!._id,
+              sortOrder: index,
+            })),
+            { session }
+          );
+
           return { organization: organization!, owner: owner! };
         }
       );
@@ -360,6 +380,15 @@ async function provisionWithCompensation(
 
         await PurposeOfInquiry.insertMany(
           STARTER_PURPOSES.map((name, index) => ({
+            organizationId: organization._id,
+            name,
+            createdBy: owner._id,
+            sortOrder: index,
+          }))
+        );
+
+        await LeadDropReason.insertMany(
+          STARTER_DROP_REASONS.map((name, index) => ({
             organizationId: organization._id,
             name,
             createdBy: owner._id,
@@ -420,6 +449,7 @@ async function rollback(organizationId: Types.ObjectId): Promise<void> {
           User.deleteMany({}),
           Role.deleteMany({}),
           PurposeOfInquiry.deleteMany({}),
+          LeadDropReason.deleteMany({}),
         ]);
       }
     );

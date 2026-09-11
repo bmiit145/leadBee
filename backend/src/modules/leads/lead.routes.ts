@@ -10,6 +10,7 @@ import {
   createLeadBody,
   createThreadItemBody,
   dashboardStatsQuery,
+  listDocumentLibraryQuery,
   listDocumentsQuery,
   listLeadsQuery,
   listThreadQuery,
@@ -53,11 +54,36 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
       response: { 200: okEnvelope, ...commonErrors },
     },
     handler: async (request) => {
-      const stats = await leadService.dashboardStats(
-        viewerOf(request),
-        request.query.project
-      );
+      const stats = await leadService.dashboardStats(viewerOf(request), request.query);
       return ok(stats);
+    },
+  });
+
+  // ─── Document library ───────────────────────────────────────────────────────
+  // A static path, so it is matched ahead of `/:id` regardless of order.
+  r.route({
+    method: 'GET',
+    url: '/documents',
+    preHandler: [app.requirePermission(PERMISSIONS.LEADS_VIEW)],
+    schema: {
+      tags: ['leads'],
+      summary: 'Every document and attachment you can reach, across leads',
+      description:
+        'Organizers see the whole organization; everyone else sees files on ' +
+        'leads assigned to or created by them.',
+      security,
+      querystring: listDocumentLibraryQuery,
+      response: { 200: listEnvelope, ...commonErrors },
+    },
+    handler: async (request) => {
+      const { kind, search, page, limit } = request.query;
+      const result = await leadThreadService.listLibrary(viewerOf(request), {
+        kind: kind as LeadDocumentKind | undefined,
+        search,
+        page,
+        limit,
+      });
+      return paginated(result.data, result.total, result.page, result.limit);
     },
   });
 

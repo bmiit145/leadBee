@@ -4,9 +4,18 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { Project } from '../../models/Project.js';
 import { PurposeOfInquiry } from '../../models/PurposeOfInquiry.js';
 import { QuickReply } from '../../models/QuickReply.js';
+import { LeadDropReason } from '../../models/LeadDropReason.js';
 import { AppError } from '../../lib/errors.js';
-import { commonErrors, idParam, messageEnvelope, okEnvelope } from '../../lib/schemas.js';
-import { message, ok } from '../../lib/response.js';
+import { pageParams } from '../../lib/pagination.js';
+import {
+  commonErrors,
+  idParam,
+  listEnvelope,
+  messageEnvelope,
+  okEnvelope,
+  paginationQuery,
+} from '../../lib/schemas.js';
+import { message, ok, paginated } from '../../lib/response.js';
 import {
   LEAD_PRIORITY_ORDER,
   LEAD_SOURCE_ORDER,
@@ -19,6 +28,11 @@ import { TASK_STATUS_ORDER } from '../../models/Task.js';
 import { requireUserId } from '../../lib/tenantContext.js';
 
 const security = [{ tenantToken: [] }];
+
+/** More than any business tracks as distinct loss reasons. */
+const DROP_REASON_CAP = 200;
+
+const dropReasonBody = z.object({ name: z.string().trim().min(1).max(80) });
 
 /**
  * Small tenant-owned reference lists — projects, meeting purposes, quick
@@ -180,6 +194,92 @@ export async function lookupRoutes(app: FastifyInstance): Promise<void> {
     },
   });
 
+  // ─── Lead drop reasons ──────────────────────────────────────────────────────
+  // Read by anyone who can close a lead; curated by organizers only.
+  r.route({
+    method: 'GET',
+    url: '/drop-reasons',
+    schema: {
+      tags: ['lookups'],
+      summary: 'List the tags offered when a lead is dropped',
+      description:
+        'Capped rather than paged: it feeds a picker that shows every option, ' +
+        'and a tag list long enough to page is not a usable picker.',
+      security,
+      response: { 200: okEnvelope, ...commonErrors },
+    },
+    handler: async () => {
+      const reasons = await LeadDropReason.find()
+        .sort({ sortOrder: 1, name: 1 })
+        .limit(DROP_REASON_CAP);
+      return ok(reasons.map((reason) => reason.toJSON()));
+    },
+  });
+
+  r.route({
+    method: 'POST',
+    url: '/drop-reasons',
+    preHandler: [app.requireOrganizer],
+    schema: {
+      tags: ['lookups'],
+      summary: 'Add a drop tag (organizers only)',
+      description: 'A name already in use answers 409.',
+      security,
+      body: dropReasonBody,
+      response: { 201: okEnvelope, ...commonErrors, 409: commonErrors[400] },
+    },
+    handler: async (request, reply) => {
+      const reason = await LeadDropReason.create({
+        name: request.body.name,
+        createdBy: requireUserId(),
+      });
+      return reply.status(201).send(ok(reason.toJSON()));
+    },
+  });
+
+  r.route({
+    method: 'PUT',
+    url: '/drop-reasons/:id',
+    preHandler: [app.requireOrganizer],
+    schema: {
+      tags: ['lookups'],
+      summary: 'Rename a drop tag (organizers only)',
+      description: 'Leads already dropped with the old name keep it — `lostReason` is text.',
+      security,
+      params: idParam,
+      body: dropReasonBody,
+      response: { 200: okEnvelope, ...commonErrors, 409: commonErrors[400] },
+    },
+    handler: async (request) => {
+      const reason = await LeadDropReason.findById(request.params.id);
+      if (!reason) throw AppError.notFound('Drop tag not found');
+      reason.name = request.body.name;
+      await reason.save();
+      return ok(reason.toJSON());
+    },
+  });
+
+  r.route({
+    method: 'DELETE',
+    url: '/drop-reasons/:id',
+    preHandler: [app.requireOrganizer],
+    schema: {
+      tags: ['lookups'],
+      summary: 'Remove a drop tag (organizers only)',
+      description:
+        'Deleted outright: a dropped lead keeps its reason as text, so nothing ' +
+        'references the tag and there is no history to preserve.',
+      security,
+      params: idParam,
+      response: { 200: messageEnvelope, ...commonErrors },
+    },
+    handler: async (request) => {
+      const reason = await LeadDropReason.findByIdAndDelete(request.params.id);
+      if (!reason) throw AppError.notFound('Drop tag not found');
+      return message('Drop tag removed');
+    },
+  });
+
   // ─── Quick replies ──────────────────────────────────────────────────────────
   // Personal to their author: the panel shows a per-user count, and one agent's
   // canned messages are not another's business.
@@ -189,15 +289,28 @@ export async function lookupRoutes(app: FastifyInstance): Promise<void> {
     schema: {
       tags: ['lookups'],
       summary: 'List your own quick replies',
+      description:
+        '`search` matches the shortcut or the message. The app always sent it; ' +
+        'until it was declared here it was silently ignored.',
       security,
-      response: { 200: okEnvelope, ...commonErrors },
+      querystring: paginationQuery.extend({ search: z.string().trim().max(120).optional() }),
+      response: { 200: listEnvelope, ...commonErrors },
     },
-    handler: async () =>
-      ok(
-        await QuickReply.find({ createdByUser: requireUserId() })
-          .sort({ createdAt: -1 })
-          .lean()
-      ),
+    handler: async (request) => {
+      const filter: Record<string, unknown> = { createdByUser: requireUserId() };
+      const { search } = request.query;
+      if (search) {
+        const regex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        filter.$or = [{ shortcut: regex }, { message: regex }];
+      }
+
+      const { page, limit, skip } = pageParams(request.query);
+      const [rows, total] = await Promise.all([
+        QuickReply.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+        QuickReply.countDocuments(filter),
+      ]);
+      return paginated(rows.map((row) => row.toJSON()), total, page, limit);
+    },
   });
 
   r.route({

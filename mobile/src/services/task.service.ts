@@ -50,8 +50,11 @@ export const taskService = {
     return res.data;
   },
 
+  /** Counts per status plus `total`, scoped to what the caller can see. */
   async getStats(): Promise<Record<string, number>> {
-    const res = await api.get<ApiResponse<Record<string, number>>>('/tasks/stats');
+    // The route is `/stats/status-counts`. The old `/tasks/stats` never existed
+    // and fell through to `GET /tasks/:id`, which rejects "stats" as an id.
+    const res = await api.get<ApiResponse<Record<string, number>>>('/tasks/stats/status-counts');
     return res.data.data;
   },
 

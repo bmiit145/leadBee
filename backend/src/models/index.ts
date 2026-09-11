@@ -39,5 +39,13 @@ export {
 } from './Meeting.js';
 export { Project, type IProject } from './Project.js';
 export { PurposeOfInquiry, type IPurposeOfInquiry } from './PurposeOfInquiry.js';
+export { LeadDropReason, type ILeadDropReason } from './LeadDropReason.js';
+export {
+  Notification,
+  NOTIFICATION_TYPES,
+  NOTIFICATION_TYPE_ORDER,
+  type INotification,
+  type NotificationType,
+} from './Notification.js';
 export { QuickReply, type IQuickReply } from './QuickReply.js';
 export { AuditLog, type IAuditLog } from './AuditLog.js';

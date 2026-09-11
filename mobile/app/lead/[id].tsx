@@ -27,12 +27,28 @@ import { LeadStage } from '../../src/types';
 import { colors, spacing, borderRadius } from '../../src/theme';
 import { LEAD_STAGE_META } from '../../src/config/leadStages';
 import { queryKeys } from '../../src/lib/queryKeys';
+import { useTranslation } from 'react-i18next';
+import { dropReasonService } from '../../src/services/dropReason.service';
 
-// Progress rail: the happy path only. Side states (drop, postponed, call_again)
-// are reachable from the picker but are not steps on the way to a sale.
+// Progress rail: the happy path only. Side states (drop, postponed, call_again,
+// pipeline) are reachable from the picker but are not steps on the way to a sale.
 const STAGE_ORDER: LeadStage[] = [
-  'new', 'assign_lead', 'follow_up', 'in_progress', 'interested', 'meeting', 'order_received',
+  'new', 'assign_lead', 'follow_up', 'qualified', 'in_progress', 'interested', 'meeting',
+  'proposal_sent', 'order_received',
 ];
+
+/**
+ * The drop tag and the agent's note share `lostReason`, which is text capped at
+ * 200 by the API. A tag name is at most 80, so the note is held to leave room
+ * for both and the separator.
+ */
+const DROP_NOTE_MAX = 110;
+
+function composeLostReason(tag: string | null, note: string): string | undefined {
+  const trimmed = note.trim();
+  if (tag && trimmed) return `${tag} — ${trimmed}`;
+  return tag ?? (trimmed || undefined);
+}
 
 const TABS: UnderlineTab[] = [
   { key: 'timeline', label: 'Time Line' },
@@ -51,13 +67,22 @@ export default function LeadDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user } = useAuth();
+  const { user, isOrganizer } = useAuth();
+  const { t } = useTranslation();
   const qc = useQueryClient();
 
   const [tab, setTab] = useState('timeline');
   const [reminderStage, setReminderStage] = useState<LeadStage | null>(null);
   const [dropReasonOpen, setDropReasonOpen] = useState(false);
   const [dropReason, setDropReason] = useState('');
+  const [dropTag, setDropTag] = useState<string | null>(null);
+
+  const dropReasons = useQuery({
+    queryKey: queryKeys.lookups.dropReasons,
+    queryFn: () => dropReasonService.list(),
+    enabled: dropReasonOpen,
+    staleTime: 5 * 60_000,
+  });
 
   const isAdmin = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'owner';
 
@@ -101,6 +126,7 @@ export default function LeadDetailScreen() {
     if (!lead || lead.stage === newStage) return;
     if (newStage === 'drop') {
       setDropReason('');
+      setDropTag(null);
       setDropReasonOpen(true);
       return;
     }
@@ -252,24 +278,60 @@ export default function LeadDetailScreen() {
         }
       />
 
-      <CenterDialog visible={dropReasonOpen} onDismiss={() => setDropReasonOpen(false)} title="Close as Lost">
-        <Text style={styles.dropLabel}>Reason for losing (optional)</Text>
+      <CenterDialog visible={dropReasonOpen} onDismiss={() => setDropReasonOpen(false)} title={t('leadDrop.title')}>
+        <Text style={styles.dropLabel}>{t('leadDrop.chooseReason')}</Text>
+        {dropReasons.isLoading ? (
+          <ActivityIndicator color={colors.primary} />
+        ) : (dropReasons.data ?? []).length === 0 ? (
+          <Text style={styles.dropEmpty}>{t('leadDrop.noTags')}</Text>
+        ) : (
+          <View style={styles.tagWrap}>
+            {(dropReasons.data ?? []).map((reason) => {
+              const selected = dropTag === reason.name;
+              return (
+                <TouchableOpacity
+                  key={reason._id}
+                  style={[styles.tag, selected && styles.tagSelected]}
+                  onPress={() => setDropTag(selected ? null : reason.name)}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                >
+                  <Text style={[styles.tagText, selected && styles.tagTextSelected]}>{reason.name}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
+        {isOrganizer ? (
+          <TouchableOpacity
+            onPress={() => {
+              setDropReasonOpen(false);
+              router.push('/lead/drop-reasons');
+            }}
+            accessibilityRole="link"
+          >
+            <Text style={styles.manageTags}>{t('leadDrop.manageTags')}</Text>
+          </TouchableOpacity>
+        ) : null}
+        <Text style={styles.dropLabel}>{t('leadDrop.otherLabel')}</Text>
         <TextInput
           value={dropReason}
           onChangeText={setDropReason}
           style={styles.dropInput}
-          placeholder="Enter reason..."
+          placeholder={t('leadDrop.otherPlaceholder')}
           placeholderTextColor={colors.textDisabled}
+          maxLength={DROP_NOTE_MAX}
           multiline
         />
         <TouchableOpacity
           style={styles.dropConfirmBtn}
           onPress={() => {
-            stageMutation.mutate({ stage: 'drop', lostReason: dropReason || undefined });
+            stageMutation.mutate({ stage: 'drop', lostReason: composeLostReason(dropTag, dropReason) });
             setDropReasonOpen(false);
           }}
         >
-          <Text style={styles.dropConfirmText}>Confirm</Text>
+          <Text style={styles.dropConfirmText}>{t('leadDrop.confirm')}</Text>
         </TouchableOpacity>
       </CenterDialog>
     </View>
@@ -295,6 +357,20 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 14, fontWeight: '700', color: colors.text, marginBottom: spacing.sm },
   pipelineRow: { flexDirection: 'row', gap: spacing.sm, paddingVertical: 2 },
   dropLabel: { fontSize: 13, fontWeight: '600', color: colors.textSecondary, marginBottom: 6 },
+  dropEmpty: { fontSize: 13, color: colors.textTertiary },
+  tagWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  tag: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: borderRadius.full,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  tagSelected: { borderColor: colors.primary, backgroundColor: colors.primary },
+  tagText: { fontSize: 13, fontWeight: '600', color: colors.text },
+  tagTextSelected: { color: '#FFFFFF' },
+  manageTags: { fontSize: 13, fontWeight: '700', color: colors.primary, textDecorationLine: 'underline' },
   dropInput: {
     borderWidth: 1.5,
     borderColor: colors.border,

@@ -3,6 +3,10 @@ import { connectDatabase, disconnectDatabase } from '../config/database.js';
 import { Organization } from '../models/Organization.js';
 import { User } from '../models/User.js';
 import { Lead } from '../models/Lead.js';
+import { Notification } from '../models/Notification.js';
+import { LeadDropReason } from '../models/LeadDropReason.js';
+import { AuditLog } from '../models/AuditLog.js';
+import { LEAD_STAGE_ORDER } from '../config/constants.js';
 import { withoutTenantScope } from '../lib/tenantContext.js';
 import '../models/index.js';
 
@@ -172,7 +176,7 @@ async function main(): Promise<void> {
   check('Dashboard stats return 200', stats.statusCode === 200);
   check(
     'Stats cover every stage in LEAD_STAGE_ORDER',
-    Object.keys(stats.json()?.data?.byStage ?? {}).length === 11,
+    Object.keys(stats.json()?.data?.byStage ?? {}).length === LEAD_STAGE_ORDER.length,
     Object.keys(stats.json()?.data?.byStage ?? {}).length
   );
 
@@ -248,6 +252,133 @@ async function main(): Promise<void> {
   });
   check('Agent cannot delete leads', agentDelete.statusCode === 403, agentDelete.statusCode);
 
+  const ownerId = login.json()?.data?.user?._id as string;
+  const agentId = agentLogin.json()?.data?.user?._id as string;
+
+  const agentHandoff = await app.inject({
+    method: 'POST',
+    url: '/api/v1/leads',
+    headers: agentAuth,
+    payload: { contactName: 'Agent Handoff', contactPhone: '9998887772', assignedTo: ownerId },
+  });
+  check(
+    'Agent cannot create a lead straight into someone else’s book',
+    agentHandoff.statusCode === 403,
+    agentHandoff.statusCode
+  );
+
+  const agentOwnLeadId = agentList.json()?.data?.[0]?._id as string | undefined;
+  const agentReassign = await app.inject({
+    method: 'PUT',
+    url: `/api/v1/leads/${agentOwnLeadId}`,
+    headers: agentAuth,
+    payload: { assignedTo: ownerId },
+  });
+  check(
+    'Agent cannot reassign a lead through the generic update',
+    agentReassign.statusCode === 403,
+    agentReassign.statusCode
+  );
+
+  const ownerAssigns = await app.inject({
+    method: 'PUT',
+    url: `/api/v1/leads/${leadId}/assign`,
+    headers: ownerAuth,
+    payload: { assignedTo: agentId },
+  });
+  check('Organizer can assign a lead to an agent', ownerAssigns.statusCode === 200, ownerAssigns.json());
+
+  const agentInbox = await app.inject({
+    method: 'GET',
+    url: '/api/v1/notifications',
+    headers: agentAuth,
+  });
+  const handoffNotice = (agentInbox.json()?.data ?? []).find(
+    (n: { type?: string; entityId?: string }) => n.type === 'lead_assigned' && n.entityId === leadId
+  ) as { _id: string } | undefined;
+  check('Assigning a lead notifies the assignee', Boolean(handoffNotice), agentInbox.json()?.total);
+
+  const unread = await app.inject({
+    method: 'GET',
+    url: '/api/v1/notifications/unread-count',
+    headers: agentAuth,
+  });
+  check('Unread count includes the new notification', (unread.json()?.data?.count ?? 0) > 0);
+
+  const ownerInboxRead = await app.inject({
+    method: 'PATCH',
+    url: `/api/v1/notifications/${handoffNotice?._id}/read`,
+    headers: ownerAuth,
+  });
+  check(
+    'A notification cannot be marked read by anyone but its recipient',
+    ownerInboxRead.statusCode === 404,
+    ownerInboxRead.statusCode
+  );
+
+  const selfReset = await app.inject({
+    method: 'POST',
+    url: `/api/v1/users/${ownerId}/reset-password`,
+    headers: ownerAuth,
+    payload: { newPassword: 'Password@123' },
+  });
+  check(
+    'Nobody resets their own password through user management',
+    selfReset.statusCode === 403,
+    selfReset.statusCode
+  );
+
+  const agentRecord = await app.inject({
+    method: 'GET',
+    url: `/api/v1/users/${agentId}`,
+    headers: ownerAuth,
+  });
+  const originalDesignation = (agentRecord.json()?.data?.designation as string | undefined) ?? '';
+  const smokeDesignation = `Smoke ${Date.now()}`;
+  const memberUpdate = await app.inject({
+    method: 'PUT',
+    url: `/api/v1/users/${agentId}`,
+    headers: ownerAuth,
+    payload: { designation: smokeDesignation },
+  });
+  check('Organizer can update a team member', memberUpdate.statusCode === 200, memberUpdate.json());
+
+  const auditEntry = await withoutTenantScope('smoke test verification', () =>
+    AuditLog.findOne({ entityId: agentId, action: 'user_updated' }).sort({ createdAt: -1 }).lean()
+  );
+  check(
+    'A team member change is written to the tenant audit trail, with only what changed',
+    auditEntry?.after?.designation === smokeDesignation &&
+      auditEntry?.actorName !== undefined &&
+      Object.keys(auditEntry?.after ?? {}).length === 1,
+    auditEntry?.after
+  );
+
+  await app.inject({
+    method: 'PUT',
+    url: `/api/v1/users/${agentId}`,
+    headers: ownerAuth,
+    payload: { designation: originalDesignation },
+  });
+
+  const dropReasonName = `Smoke drop reason ${Date.now()}`;
+  const agentDropReason = await app.inject({
+    method: 'POST',
+    url: '/api/v1/drop-reasons',
+    headers: agentAuth,
+    payload: { name: dropReasonName },
+  });
+  check('Agent cannot add drop tags', agentDropReason.statusCode === 403, agentDropReason.statusCode);
+
+  const ownerDropReason = await app.inject({
+    method: 'POST',
+    url: '/api/v1/drop-reasons',
+    headers: ownerAuth,
+    payload: { name: dropReasonName },
+  });
+  check('Organizer can add a drop tag', ownerDropReason.statusCode === 201, ownerDropReason.json());
+  const dropReasonId = ownerDropReason.json()?.data?._id as string;
+
   // ─── CROSS-TENANT ISOLATION ─────────────────────────────────────────────────
   section('Cross-tenant isolation (the one that matters)');
 
@@ -322,6 +453,42 @@ async function main(): Promise<void> {
     'Tenant B cannot read tenant A’s lead thread',
     crossThread.statusCode === 404,
     crossThread.statusCode
+  );
+
+  const crossNotification = await app.inject({
+    method: 'PATCH',
+    url: `/api/v1/notifications/${handoffNotice?._id}/read`,
+    headers: tenantBAuth,
+  });
+  check(
+    'Tenant B cannot touch tenant A’s notification by id',
+    crossNotification.statusCode === 404,
+    crossNotification.statusCode
+  );
+
+  const tenantBDropReasons = await app.inject({
+    method: 'GET',
+    url: '/api/v1/drop-reasons',
+    headers: tenantBAuth,
+  });
+  const tenantBReasonNames = (tenantBDropReasons.json()?.data ?? []).map(
+    (reason: { name: string }) => reason.name
+  );
+  check(
+    'A new tenant starts with its own drop tags, and never sees tenant A’s',
+    tenantBReasonNames.length > 0 && !tenantBReasonNames.includes(dropReasonName),
+    tenantBReasonNames
+  );
+
+  const crossDropReason = await app.inject({
+    method: 'DELETE',
+    url: `/api/v1/drop-reasons/${dropReasonId}`,
+    headers: tenantBAuth,
+  });
+  check(
+    'Tenant B cannot remove tenant A’s drop tag by id',
+    crossDropReason.statusCode === 404,
+    crossDropReason.statusCode
   );
 
   // Verify at the data layer too: tenant A's lead genuinely still says what it did.
@@ -461,8 +628,12 @@ async function main(): Promise<void> {
   await withoutTenantScope('smoke test cleanup', async () => {
     await Lead.deleteMany({ organizationId: orgB!._id });
     await User.deleteMany({ organizationId: orgB!._id });
+    await LeadDropReason.deleteMany({ organizationId: orgB!._id });
+    await Notification.deleteMany({ organizationId: orgB!._id });
     await Organization.deleteOne({ _id: orgB!._id });
     await Lead.deleteOne({ _id: leadId });
+    await Notification.deleteMany({ entityId: leadId });
+    await LeadDropReason.deleteOne({ _id: dropReasonId });
   });
 
   await app.close();

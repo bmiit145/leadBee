@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { loginPhoneSchema } from '../../lib/phone.js';
+import { isExpoPushToken } from '../../lib/expoPush.js';
 
 export const objectId = z
   .string()
@@ -26,7 +27,9 @@ export const changePasswordBody = z.object({
 });
 
 export const pushTokenBody = z.object({
-  pushToken: z.string().trim().min(1),
+  // Only Expo tokens are ever sent to. Anything else would be stored, then
+  // silently skipped at delivery — and could be used to clear a real token.
+  pushToken: z.string().trim().max(200).refine(isExpoPushToken, 'Not an Expo push token'),
 });
 
 export const updateMeBody = z.object({

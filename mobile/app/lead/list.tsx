@@ -25,6 +25,10 @@ import { useAuth } from '../../src/stores/auth.store';
 import { Lead, LeadStage, LeadPriority, LeadDashboardStats } from '../../src/types';
 import { colors, spacing, borderRadius } from '../../src/theme';
 import { LEAD_STAGE_META, LEAD_STAGE_ORDER } from '../../src/config/leadStages';
+import { MemberFilter } from '../../src/components/MemberFilter';
+import { purposeService } from '../../src/services/purpose.service';
+import { queryKeys } from '../../src/lib/queryKeys';
+import { useTranslation } from 'react-i18next';
 
 // Derived from the shared stage config so a new stage shows up here automatically
 // instead of being silently dropped from the filter strip.
@@ -59,6 +63,8 @@ const QUALITY_OPTIONS = [
 interface Filters {
   priority: LeadPriority | '';
   source: string;
+  /** Purpose of Inquiry, by name — what the create form stores. */
+  purpose: string;
   dateFrom: Date | null;
   dateTo: Date | null;
   budgetMin: string;
@@ -69,6 +75,7 @@ interface Filters {
 const DEFAULT_FILTERS: Filters = {
   priority: '',
   source: '',
+  purpose: '',
   dateFrom: null,
   dateTo: null,
   budgetMin: '',
@@ -91,6 +98,7 @@ function countActiveFilters(f: Filters): number {
   return [
     f.priority !== '',
     f.source !== '',
+    f.purpose !== '',
     f.dateFrom !== null,
     f.dateTo !== null,
     f.budgetMin !== '',
@@ -103,12 +111,14 @@ export default function LeadListScreen() {
   const router   = useRouter();
   const insets   = useSafeAreaInsets();
   const { isOrganizer } = useAuth();
+  const { t } = useTranslation();
 
   const [search, setSearch]             = useState('');
   const [debouncedSearch, setDebounced] = useState('');
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [selectedStage, setSelectedStage] = useState<LeadStage | ''>('');
+  const [memberId, setMemberId] = useState<string | null>(null);
 
   const [showFilter, setShowFilter] = useState(false);
   const [applied, setApplied]       = useState<Filters>(DEFAULT_FILTERS);
@@ -120,19 +130,29 @@ export default function LeadListScreen() {
   const [allLeads, setAllLeads] = useState<Lead[]>([]);
 
   const statsQuery = useQuery({
-    queryKey: ['leads-stats'],
-    queryFn: () => leadService.getDashboardStats(),
+    // Under the shared `leads-stats` prefix, so a lead mutation still refreshes
+    // it; per member, so the tab counts match the rows being shown.
+    queryKey: [...queryKeys.leads.stats, memberId],
+    queryFn: () => leadService.getDashboardStats({ assignedTo: memberId ?? undefined }),
     staleTime: 60_000,
+  });
+  const purposesQuery = useQuery({
+    queryKey: queryKeys.lookups.purposes,
+    queryFn: () => purposeService.getAll(),
+    enabled: showFilter,
+    staleTime: 5 * 60_000,
   });
   const stats = statsQuery.data;
 
   const { data, isLoading, isFetching, refetch } = useQuery({
-    queryKey: ['leads', selectedStage, applied, debouncedSearch, page],
+    queryKey: ['leads', selectedStage, applied, debouncedSearch, page, memberId],
     queryFn: async () => {
       const result = await leadService.getAll({
         stage:           selectedStage || undefined,
         priority:        applied.priority || undefined,
         source:          applied.source   || undefined,
+        interestedIn:    applied.purpose  || undefined,
+        assignedTo:      memberId ?? undefined,
         search:          debouncedSearch  || undefined,
         overdueFollowUp: applied.overdue  || undefined,
         dateFrom:        applied.dateFrom ? applied.dateFrom.toISOString() : undefined,
@@ -182,6 +202,11 @@ export default function LeadListScreen() {
     resetPagination();
   };
 
+  const handleMember = (id: string | null) => {
+    setMemberId(id);
+    resetPagination();
+  };
+
   const handleRefresh = useCallback(() => { resetPagination(); refetch(); }, [refetch]);
 
   const handleLoadMore = () => {
@@ -221,6 +246,8 @@ export default function LeadListScreen() {
           <Ionicons name="add" size={22} color="#fff" />
         </TouchableOpacity>
       </View>
+
+      <MemberFilter value={memberId} onChange={handleMember} style={styles.memberFilter} />
 
       {/* Stats strip */}
       {stats && (
@@ -452,6 +479,29 @@ export default function LeadListScreen() {
               </View>
 
               <View style={styles.filterSection}>
+                <Text style={styles.filterLabel}>{t('leadList.purposeFilter')}</Text>
+                {purposesQuery.isLoading ? (
+                  <ActivityIndicator color={colors.primary} />
+                ) : (
+                  <View style={styles.chipGrid}>
+                    {(purposesQuery.data ?? []).map(p => {
+                      const isOn = draft.purpose === p.name;
+                      return (
+                        <TouchableOpacity
+                          key={p._id}
+                          style={[styles.chip, isOn && styles.chipActive]}
+                          onPress={() => setDraft(prev => ({ ...prev, purpose: isOn ? '' : p.name }))}
+                          activeOpacity={0.75}
+                        >
+                          <Text style={[styles.chipText, isOn && styles.chipTextActive]}>{p.name}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
+
+              <View style={styles.filterSection}>
                 <Text style={styles.filterLabel}>Leads Quality</Text>
                 <View style={styles.qualityRow}>
                   {QUALITY_OPTIONS.map(q => {
@@ -534,6 +584,7 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
   },
+  memberFilter: { marginHorizontal: spacing.md, marginBottom: 12 },
   statsRow: { flexDirection: 'row', marginHorizontal: spacing.md, marginBottom: 12, gap: 8 },
   statCard: {
     flex: 1,

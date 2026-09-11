@@ -22,6 +22,11 @@ import type { Viewer } from './lead.service.js';
  * entry by its own id must not be a way around the lead's own visibility rule.
  */
 
+/** User input goes into a RegExp; `.` and `*` would otherwise be operators. */
+function escapeRegex(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /** Throws 404 if the lead is not in this tenant, 403 if it is not this agent's. */
 async function assertLeadAccess(leadId: string, viewer: Viewer): Promise<void> {
   const lead = await Lead.findOne({ _id: leadId, isActive: true }).select(
@@ -175,6 +180,45 @@ export const leadThreadService = {
     ]);
 
     return { data, total, page, limit };
+  },
+
+  /**
+   * Every document and attachment the viewer can reach — the drawer's Document
+   * screen.
+   *
+   * An agent's reach is their own book, so their visible lead ids are resolved
+   * first; that set is bounded by what one person works. An organizer skips the
+   * lookup: on a large organization it would be tens of thousands of ids that
+   * narrow nothing. Files on a soft-deleted lead therefore still list for an
+   * organizer, marked by the populated lead's `isActive`, rather than silently
+   * dropping out of a page and skewing its count.
+   */
+  async listLibrary(
+    viewer: Viewer,
+    options: { kind?: LeadDocumentKind; search?: string; page?: number; limit?: number } = {}
+  ) {
+    const filter: Record<string, unknown> = {};
+    if (!viewer.isOrganizer) {
+      const leadIds = await Lead.distinct('_id', {
+        isActive: true,
+        $or: [{ assignedTo: viewer.userId }, { createdBy: viewer.userId }],
+      });
+      filter.lead = { $in: leadIds };
+    }
+    if (options.kind) filter.kind = options.kind;
+    if (options.search) filter.name = new RegExp(escapeRegex(options.search), 'i');
+
+    const { page, limit, skip } = pageParams(options);
+    const [rows, total] = await Promise.all([
+      LeadDocument.find(filter)
+        .populate('lead', 'leadNumber contactName contactPhone isActive')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      LeadDocument.countDocuments(filter),
+    ]);
+
+    return { data: rows.map((row) => row.toJSON()), total, page, limit };
   },
 
   async addDocument(

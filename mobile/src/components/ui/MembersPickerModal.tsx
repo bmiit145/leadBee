@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { colors, spacing, borderRadius } from '../../theme';
 import { userService, TeamMember } from '../../services/user.service';
 import { useAuth } from '../../stores/auth.store';
+import { queryKeys } from '../../lib/queryKeys';
 import { CenterDialog } from './CenterDialog';
 import { Avatar } from './Avatar';
 
@@ -20,7 +21,7 @@ interface Props {
 export function MembersPickerModal({ visible, onDismiss, selected, onChange }: Props) {
   const { user } = useAuth();
   const { data, isLoading } = useQuery({
-    queryKey: ['team-members'],
+    queryKey: queryKeys.users.members,
     queryFn: () => userService.list(),
     enabled: visible,
     staleTime: 5 * 60_000,

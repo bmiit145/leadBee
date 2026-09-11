@@ -25,6 +25,10 @@ import { LeadSource, LeadPriority, LeadStage } from '../../src/types';
 import { colors, spacing, borderRadius } from '../../src/theme';
 import { LEAD_STAGE_META, LEAD_STAGE_ORDER } from '../../src/config/leadStages';
 import { isValidPhone } from '../../src/utils/validators';
+import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { userService } from '../../src/services/user.service';
+import { queryKeys } from '../../src/lib/queryKeys';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -542,6 +546,8 @@ interface FormData {
   nextFollowUpAt: Date | null;
   notes: string;
   estimateAmount: string;
+  /** A member's id; empty means the creator, which is also the API's default. */
+  assignedTo: string;
 }
 
 const DEFAULT_FORM: FormData = {
@@ -557,6 +563,7 @@ const DEFAULT_FORM: FormData = {
   nextFollowUpAt: null,
   notes: '',
   estimateAmount: '',
+  assignedTo: '',
 };
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
@@ -564,7 +571,8 @@ const DEFAULT_FORM: FormData = {
 export default function AddLeadScreen() {
   const router  = useRouter();
   const insets  = useSafeAreaInsets();
-  const { defaultProject, isOrganizer } = useAuth();
+  const { isOrganizer, user } = useAuth();
+  const { t } = useTranslation();
   const { edit } = useLocalSearchParams<{ edit?: string }>();
 
   const [form, setForm]             = useState<FormData>(DEFAULT_FORM);
@@ -575,6 +583,18 @@ export default function AddLeadScreen() {
   const [showQualityPicker, setShowQualityPicker] = useState(false);
   const [showStagePicker, setShowStagePicker]     = useState(false);
   const [showPurposePicker, setShowPurposePicker] = useState(false);
+  const [showAssignPicker, setShowAssignPicker]   = useState(false);
+
+  // Handing a new lead to someone else is an organizer's call; the API refuses
+  // it from anyone else, so nobody else is offered the picker.
+  const membersQuery = useQuery({
+    queryKey: queryKeys.users.members,
+    queryFn: () => userService.list(),
+    enabled: isOrganizer,
+    staleTime: 5 * 60_000,
+  });
+  const memberLabel = (id: string, name: string) =>
+    id === user?._id ? t('memberFilter.self', { name }) : name;
 
   // Date picker state
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -585,6 +605,10 @@ export default function AddLeadScreen() {
   const sourceName  = SOURCES.find(s => s.value === form.source)?.label ?? 'Other';
   const qualityName = QUALITIES.find(q => q.value === form.priority)?.label ?? 'Medium';
   const stageName   = STAGES.find(s => s.value === form.stage)?.label ?? 'New';
+  const assignee    = membersQuery.data?.find(m => m._id === form.assignedTo);
+  const assigneeName = assignee
+    ? memberLabel(assignee._id, assignee.name)
+    : t('memberFilter.self', { name: user?.name ?? '' });
 
   // ── Validation ──
 
@@ -609,6 +633,8 @@ export default function AddLeadScreen() {
     const error = validate();
     if (error) { Alert.alert('Validation', error); return; }
 
+    const estimate = form.estimateAmount.trim() ? Number(form.estimateAmount) : undefined;
+
     try {
       setSubmitting(true);
       await leadService.create({
@@ -621,9 +647,17 @@ export default function AddLeadScreen() {
         priority:           form.priority,
         stage:              form.stage,
         interestedIn:       form.interestedIn.trim() || undefined,
+        // One estimate on the form; the lead models a budget range and the
+        // list's budget filter matches on overlap, so a single figure is stored
+        // as a range of one. It used to be validated and then never sent.
+        budgetMin:          estimate,
+        budgetMax:          estimate,
+        assignedTo:
+          isOrganizer && form.assignedTo && form.assignedTo !== user?._id
+            ? form.assignedTo
+            : undefined,
         nextFollowUpAt:     form.nextFollowUpAt ? form.nextFollowUpAt.toISOString() : undefined,
         notes:              form.notes.trim() || undefined,
-        project:            defaultProject?._id,
       });
 
       if (andCreateNew) {
@@ -728,6 +762,16 @@ export default function AddLeadScreen() {
             placeholder="Select lead status"
             onPress={() => setShowStagePicker(true)}
           />
+
+          {isOrganizer ? (
+            <PickerRow
+              icon="person-add-outline"
+              label={t('leadForm.assignTo')}
+              value={assigneeName}
+              placeholder={t('leadForm.assignTo')}
+              onPress={() => setShowAssignPicker(true)}
+            />
+          ) : null}
 
           <PickerRow
             icon="globe-outline"
@@ -915,6 +959,20 @@ export default function AddLeadScreen() {
         onSelect={set('interestedIn')}
         onClose={() => setShowPurposePicker(false)}
         isOrganizer={isOrganizer}
+      />
+
+      <PickerModal
+        visible={showAssignPicker}
+        title={t('leadForm.assignTitle')}
+        options={(membersQuery.data ?? []).map(m => ({
+          value: m._id,
+          label: memberLabel(m._id, m.name),
+          desc: t(`team.roles.${m.role}`, { defaultValue: m.role }),
+          icon: 'person-outline',
+        }))}
+        selected={form.assignedTo || user?._id || ''}
+        onSelect={set('assignedTo')}
+        onClose={() => setShowAssignPicker(false)}
       />
 
     </KeyboardAvoidingView>

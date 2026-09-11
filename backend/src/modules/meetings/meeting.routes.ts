@@ -139,7 +139,7 @@ export async function meetingRoutes(app: FastifyInstance): Promise<void> {
       response: { 200: okEnvelope, ...commonErrors },
     },
     handler: async (request) =>
-      ok(await meetingService.update(request.params.id, request.body)),
+      ok(await meetingService.update(request.params.id, request.body, viewerOf(request))),
   });
 
   r.route({

@@ -5,6 +5,7 @@ import { Lead } from '../../models/Lead.js';
 import { AppError } from '../../lib/errors.js';
 import { nextDisplayNumber } from '../../lib/counters.js';
 import { pageParams } from '../../lib/pagination.js';
+import { notificationService } from '../notifications/notification.service.js';
 import type { Viewer } from '../leads/lead.service.js';
 
 export interface MeetingFilters {
@@ -195,6 +196,17 @@ export const meetingService = {
     meeting.linkedTaskId = task._id;
     await meeting.save();
 
+    // One notification for the pair: the companion task is bookkeeping for
+    // the meeting, and a second alert for it would be noise.
+    await notificationService.notify({
+      type: 'meeting_assigned',
+      recipients: assignees,
+      actor: viewer,
+      entityId: meeting._id,
+      subject: lead.contactName,
+      at: meeting.scheduledAt,
+    });
+
     return meeting.populate(POPULATE as unknown as string[]);
   },
 
@@ -247,13 +259,30 @@ export const meetingService = {
     return meeting;
   },
 
-  async update(meetingId: string, data: Record<string, unknown>): Promise<IMeeting> {
+  async update(meetingId: string, data: Record<string, unknown>, viewer: Viewer): Promise<IMeeting> {
     const meeting = await Meeting.findOne({ _id: meetingId, isActive: true });
     if (!meeting) throw AppError.notFound('Meeting not found');
 
+    const previousAssignees = new Set(meeting.assignedTo.map((id) => id.toString()));
     const safe = sanitize(data);
     Object.assign(meeting, safe);
     await meeting.save();
+
+    // Only people newly added to the meeting hear about it.
+    const added = Array.isArray(safe.assignedTo)
+      ? meeting.assignedTo.filter((id) => !previousAssignees.has(id.toString()))
+      : [];
+    if (added.length > 0) {
+      const lead = await Lead.findById(meeting.leadId).select('contactName').lean();
+      await notificationService.notify({
+        type: 'meeting_assigned',
+        recipients: added,
+        actor: viewer,
+        entityId: meeting._id,
+        subject: lead?.contactName ?? meeting.meetingNumber,
+        at: meeting.scheduledAt,
+      });
+    }
 
     // Keep the companion task's window aligned when a meeting moves.
     if (meeting.linkedTaskId && (safe.scheduledAt || safe.durationMinutes)) {

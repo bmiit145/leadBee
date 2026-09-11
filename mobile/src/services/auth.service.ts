@@ -128,11 +128,15 @@ export const authService = {
     });
   },
 
-  async updateDefaultProject(defaultProjectId?: string | null): Promise<User> {
-    const { data } = await api.put<ApiResponse<User>>('/auth/default-project', {
-      defaultProjectId: defaultProjectId ?? null,
-    });
-    return data.data;
+  /**
+   * Updates the signed-in user's own name, email and designation.
+   *
+   * Resolves to nothing on purpose: the response carries `roleId` unpopulated,
+   * so callers re-read the session with `reloadSession` instead of trusting it.
+   * Phone is not accepted — it is the sign-in identifier.
+   */
+  async updateProfile(changes: { name: string; email: string; designation: string }): Promise<void> {
+    await api.put<ApiResponse<unknown>>('/auth/me', changes);
   },
 
   async registerPushToken(pushToken: string): Promise<void> {

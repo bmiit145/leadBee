@@ -44,6 +44,8 @@ const leadDocumentSchema = new Schema<ILeadDocument>(
 leadDocumentSchema.plugin(tenantPlugin);
 
 leadDocumentSchema.index({ organizationId: 1, lead: 1, kind: 1, createdAt: -1 });
+// The document library: every file in the organization, newest first.
+leadDocumentSchema.index({ organizationId: 1, createdAt: -1 });
 
 export const LeadDocument: Model<ILeadDocument> = mongoose.model<ILeadDocument>(
   'LeadDocument',

@@ -27,6 +27,7 @@ import { meetingRoutes } from './modules/meetings/meeting.routes.js';
 import { userRoutes } from './modules/users/user.routes.js';
 import { roleRoutes } from './modules/roles/role.routes.js';
 import { lookupRoutes } from './modules/lookups/lookup.routes.js';
+import { notificationRoutes } from './modules/notifications/notification.routes.js';
 import { platformRoutes } from './modules/platform/platform.routes.js';
 import { catalogRoutes } from './modules/platform/catalog.routes.js';
 
@@ -75,6 +76,7 @@ export async function buildApp() {
   await app.register(userRoutes, { prefix: `${API_PREFIX}/users` });
   await app.register(roleRoutes, { prefix: `${API_PREFIX}/roles` });
   await app.register(lookupRoutes, { prefix: API_PREFIX });
+  await app.register(notificationRoutes, { prefix: `${API_PREFIX}/notifications` });
 
   // Control plane. Separate token realm — see lib/tokens.ts.
   await app.register(platformRoutes, { prefix: `${API_PREFIX}/platform` });

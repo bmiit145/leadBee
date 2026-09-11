@@ -1,17 +1,22 @@
 import api from './api';
-import { ApiResponse, QuickReply } from '../types';
+import { ApiResponse, PaginatedResponse, QuickReply } from '../types';
 
 interface QuickReplyInput {
   shortcut: string;
   message: string;
 }
 
+/** The API's page ceiling. A personal canned-message list longer than this is
+ *  one nobody scrolls; search is the way in. */
+const MAX_PAGE = 100;
+
 /** Personal WhatsApp canned messages, managed from the Lead Details "Quick
- *  Reply" tab. Not lead-scoped — the same list is available on every lead. */
+ *  Reply" tab and the drawer. Not lead-scoped — the same list is on every lead. */
 export const quickReplyService = {
   async list(search?: string): Promise<QuickReply[]> {
-    const qs = search ? `?search=${encodeURIComponent(search)}` : '';
-    const res = await api.get<ApiResponse<QuickReply[]>>(`/quick-replies${qs}`);
+    const res = await api.get<PaginatedResponse<QuickReply>>('/quick-replies', {
+      params: { limit: MAX_PAGE, ...(search ? { search } : {}) },
+    });
     return res.data.data;
   },
 

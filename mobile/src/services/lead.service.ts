@@ -9,6 +9,7 @@ import {
   LeadThreadChannel,
   LeadDocument,
   LeadDocumentKind,
+  LibraryDocument,
 } from '../types';
 
 interface LeadFilters {
@@ -17,6 +18,8 @@ interface LeadFilters {
   source?: string;
   assignedTo?: string;
   project?: string;
+  /** Purpose of Inquiry, by name. */
+  interestedIn?: string;
   search?: string;
   page?: number;
   limit?: number;
@@ -74,6 +77,7 @@ export const leadService = {
     if (filters.source) params.append('source', filters.source);
     if (filters.assignedTo) params.append('assignedTo', filters.assignedTo);
     if (filters.project) params.append('project', filters.project);
+    if (filters.interestedIn) params.append('interestedIn', filters.interestedIn);
     if (filters.search) params.append('search', filters.search);
     if (filters.page) params.append('page', String(filters.page));
     if (filters.limit) params.append('limit', String(filters.limit));
@@ -139,10 +143,28 @@ export const leadService = {
     return res.data.data;
   },
 
-  async getDashboardStats(project?: string): Promise<LeadDashboardStats> {
-    const params = project ? `?project=${project}` : '';
-    const res = await api.get<ApiResponse<LeadDashboardStats>>(`/leads/stats/dashboard${params}`);
+  /** `assignedTo` narrows the counts to one member's book — organizers only; the
+   *  API ignores it for anyone else. */
+  async getDashboardStats(
+    filters: { project?: string; assignedTo?: string } = {}
+  ): Promise<LeadDashboardStats> {
+    const res = await api.get<ApiResponse<LeadDashboardStats>>('/leads/stats/dashboard', {
+      params: filters,
+    });
     return res.data.data;
+  },
+
+  /** Every document and attachment the caller can reach, across leads. */
+  async getDocumentLibrary(filters: {
+    kind?: LeadDocumentKind;
+    search?: string;
+    page: number;
+    limit: number;
+  }): Promise<PaginatedResponse<LibraryDocument>> {
+    const res = await api.get<PaginatedResponse<LibraryDocument>>('/leads/documents', {
+      params: filters,
+    });
+    return res.data;
   },
 
   // ─── Threads: Time Line / Notes / Ask Query ───────────────────────────────

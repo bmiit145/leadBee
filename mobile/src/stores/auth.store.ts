@@ -2,11 +2,10 @@ import React, { createContext, useContext, useState, useCallback, useEffect, use
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { User } from '../types';
 import { authService } from '../services/auth.service';
-import { projectService } from '../services/project.service';
 import { storage } from '../utils/storage';
 import { systemService, ServerStatus } from '../services/system.service';
 import { setForcedLogoutCallback, setOrgInactiveCallback } from '../services/api';
-import { ProjectRef, Organization } from '../types';
+import { Organization } from '../types';
 
 export type ViewMode = 'admin' | 'agent';
 const VIEW_MODE_KEY = 'lead_view_mode';
@@ -26,9 +25,6 @@ interface AuthContextType {
    *  Distinct from a sign-in failure — the credentials are fine. */
   orgInactiveMessage: string | null;
   clearOrgInactive: () => void;
-  projects: ProjectRef[];
-  defaultProject: ProjectRef | null;
-  isProjectsLoading: boolean;
   isAuthenticated: boolean;
   isLoading: boolean;
   isInitialized: boolean;
@@ -41,7 +37,7 @@ interface AuthContextType {
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
   refreshAuth: () => Promise<void>;
-  refreshProjects: (options?: { force?: boolean }) => Promise<void>;
+  reloadSession: () => Promise<void>;
   checkServerHealth: () => Promise<ServerStatus>;
   hasPermission: (permission: string) => boolean;
   hasAnyPermission: (permissions: string[]) => boolean;
@@ -53,9 +49,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [orgInactiveMessage, setOrgInactiveMessage] = useState<string | null>(null);
-  const [projects, setProjects] = useState<ProjectRef[]>([]);
-  const [defaultProject, setDefaultProject] = useState<ProjectRef | null>(null);
-  const [isProjectsLoading, setIsProjectsLoading] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking');
@@ -84,65 +77,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  const extractDefaultProjectId = useCallback((currentUser: User | null): string | null => {
-    if (!currentUser?.defaultProject) return null;
-    if (typeof currentUser.defaultProject === 'string') return currentUser.defaultProject;
-    return currentUser.defaultProject._id;
-  }, []);
-
-  const applyProjectState = useCallback(
-    (data: { projects: ProjectRef[]; defaultProject: ProjectRef | null }, currentUser: User | null) => {
-      const availableProjects = data.projects || [];
-      const userDefaultId = extractDefaultProjectId(currentUser);
-      const apiDefaultId = data.defaultProject?._id || null;
-      const preferredId = userDefaultId || apiDefaultId;
-      const matchedDefault = preferredId
-        ? availableProjects.find((p) => p._id === preferredId) || null
-        : null;
-      setProjects(availableProjects);
-      setDefaultProject(matchedDefault || data.defaultProject || null);
-    },
-    [extractDefaultProjectId]
-  );
-
-  const refreshProjectsForUser = useCallback(
-    async (currentUser: User | null, options?: { force?: boolean }) => {
-      if (!currentUser) { setProjects([]); setDefaultProject(null); return; }
-      setIsProjectsLoading(true);
-      try {
-        const data = await projectService.preloadProjects({ force: options?.force === true });
-        applyProjectState(data, currentUser);
-      } catch {
-        console.warn('⚠️ Failed to refresh projects');
-      } finally {
-        setIsProjectsLoading(false);
-      }
-    },
-    [applyProjectState]
-  );
-
-  const refreshProjects = useCallback(
-    async (options?: { force?: boolean }) => { await refreshProjectsForUser(user, options); },
-    [refreshProjectsForUser, user]
-  );
-
   const checkAuth = useCallback(async () => {
     try {
       const [token, cachedUser] = await Promise.all([storage.getAccessToken(), storage.getUser()]);
       if (!token) { setUser(null); return; }
 
-      if (cachedUser) {
-        setUser(cachedUser);
-        const cachedProjects = await projectService.getCachedProjects();
-        if (cachedProjects) applyProjectState(cachedProjects, cachedUser);
-      }
+      if (cachedUser) setUser(cachedUser);
 
       try {
         const session = await authService.getMe();
         setUser(session.user);
         setOrganization(session.organization);
         await storage.setUser(session.user);
-        void refreshProjectsForUser(session.user, { force: false });
       } catch (error: any) {
         const status = error.response?.status;
         if (status === 401 || status === 403 || status === 400) {
@@ -152,12 +98,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setUser(session.user);
             setOrganization(session.organization);
             await storage.setUser(session.user);
-            void refreshProjectsForUser(session.user, { force: false });
           } catch (refreshError: any) {
             const refreshStatus = refreshError?.response?.status;
             if (refreshStatus === 400 || refreshStatus === 401 || refreshStatus === 403) {
-              setUser(null); setOrganization(null); setProjects([]); setDefaultProject(null);
-              await projectService.clearCache();
+              setUser(null); setOrganization(null);
               await storage.clearTokens();
             }
           }
@@ -170,7 +114,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {
       console.error('❌ Auth initialization error');
     }
-  }, [applyProjectState, refreshProjectsForUser]);
+  }, []);
 
   const refreshAuth = useCallback(async () => {
     try {
@@ -179,15 +123,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const session = await authService.getMe();
       setUser(session.user);
       setOrganization(session.organization);
-      void refreshProjectsForUser(session.user, { force: true });
     } catch {
-      setUser(null); setOrganization(null); setProjects([]); setDefaultProject(null);
-      await projectService.clearCache();
+      setUser(null); setOrganization(null);
       await storage.clearTokens();
     } finally {
       setIsLoading(false);
     }
-  }, [refreshProjectsForUser]);
+  }, []);
+
+  /**
+   * Re-reads the session from `/auth/me` without rotating tokens.
+   *
+   * Used after the user edits their own profile. The `PUT /auth/me` response is
+   * not a substitute: it returns the user with `roleId` unpopulated, which would
+   * silently drop role permissions from the client until the next sign-in.
+   * Unlike `refreshAuth`, a failure here is left to the caller and never signs
+   * the user out — the edit itself has already been saved.
+   */
+  const reloadSession = useCallback(async () => {
+    const session = await authService.getMe();
+    setUser(session.user);
+    setOrganization(session.organization);
+    await storage.setUser(session.user);
+  }, []);
 
   const login = useCallback(
     async (phone: string, password: string, organizationId?: string) => {
@@ -198,15 +156,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser(result.user);
         setOrganization(result.organization);
         await storage.setUser(result.user);
-        void refreshProjectsForUser(result.user, { force: true });
       } catch (error) {
-        setUser(null); setOrganization(null); setProjects([]); setDefaultProject(null);
+        setUser(null); setOrganization(null);
         throw error;
       } finally {
         setIsLoading(false);
       }
     },
-    [refreshProjectsForUser]
+    []
   );
 
   const logout = useCallback(async () => {
@@ -216,9 +173,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {
       // Ignored: the local session is cleared regardless.
     } finally {
-      setUser(null); setOrganization(null); setProjects([]); setDefaultProject(null);
+      setUser(null); setOrganization(null);
       setOrgInactiveMessage(null);
-      await projectService.clearCache();
       await storage.clearTokens();
       setIsLoading(false);
     }
@@ -229,8 +185,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Bridge the Axios interceptors into React state.
   useEffect(() => {
     setForcedLogoutCallback(async () => {
-      setUser(null); setOrganization(null); setProjects([]); setDefaultProject(null);
-      await projectService.clearCache();
+      setUser(null); setOrganization(null);
       await storage.clearTokens();
     });
 
@@ -310,9 +265,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     organization,
     orgInactiveMessage,
     clearOrgInactive,
-    projects,
-    defaultProject,
-    isProjectsLoading,
     isAuthenticated: !!safeUser,
     isLoading,
     isInitialized,
@@ -325,7 +277,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     logout,
     checkAuth,
     refreshAuth,
-    refreshProjects,
+    reloadSession,
     checkServerHealth,
     hasPermission,
     hasAnyPermission,

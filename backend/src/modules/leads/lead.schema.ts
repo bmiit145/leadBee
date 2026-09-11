@@ -28,6 +28,7 @@ export const createLeadBody = z.object({
   preferredConfig: optionalText,
   address: optionalText,
   gstNumber: optionalText,
+  /** Anyone but the caller is an organizer-only choice; enforced in the service. */
   assignedTo: objectIdSchema.optional(),
   nextFollowUpAt: z.string().datetime({ offset: true }).optional(),
   reminderMinutesBefore: z.array(z.number().int().min(0)).optional(),
@@ -43,7 +44,8 @@ export const updateLeadBody = createLeadBody
 
 export const updateStageBody = z.object({
   stage: z.enum(LEAD_STAGE_ORDER as [string, ...string[]]),
-  lostReason: optionalText,
+  /** A drop tag's name or the agent's own words. */
+  lostReason: z.string().trim().max(200).optional(),
   // Set together with the stage change, matching the combined dialog in the UI.
   nextFollowUpAt: z.string().datetime({ offset: true }).nullable().optional(),
   reminderMinutesBefore: z.array(z.number().int().min(0)).optional(),
@@ -59,6 +61,8 @@ export const listLeadsQuery = paginationQuery.extend({
   source: z.enum(LEAD_SOURCE_ORDER as [string, ...string[]]).optional(),
   assignedTo: objectIdSchema.optional(),
   project: objectIdSchema.optional(),
+  /** Purpose of Inquiry, by name — what the create form stores. */
+  interestedIn: z.string().trim().min(1).max(120).optional(),
   search: z.string().trim().optional(),
   overdueFollowUp: booleanQuery.optional(),
   /** Powers the Reminder screen's Today / Tomorrow / Overdue tabs. */
@@ -101,6 +105,11 @@ export const listDocumentsQuery = paginationQuery.extend({
   kind: z.enum(['document', 'attachment']).optional(),
 });
 
+/** The drawer's Document screen: every file the caller can reach, across leads. */
+export const listDocumentLibraryQuery = listDocumentsQuery.extend({
+  search: z.string().trim().max(120).optional(),
+});
+
 export const createDocumentBody = z.object({
   kind: z.enum(['document', 'attachment']),
   name: z.string().trim().min(1),
@@ -111,4 +120,6 @@ export const createDocumentBody = z.object({
 
 export const dashboardStatsQuery = z.object({
   project: objectIdSchema.optional(),
+  /** One member's counts, for the organizer's per-member view. */
+  assignedTo: objectIdSchema.optional(),
 });

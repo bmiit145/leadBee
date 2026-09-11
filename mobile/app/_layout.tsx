@@ -23,7 +23,14 @@ import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { ServerDownScreen } from '../src/components/ServerDownScreen';
 import { OrgInactiveScreen } from '../src/components/OrgInactiveScreen';
 import { queryClient } from '../src/lib/queryClient';
+import { queryKeys } from '../src/lib/queryKeys';
 import { initializeI18n } from '../src/i18n';
+import {
+  listenForNotifications,
+  registerForPushNotifications,
+  type PushTap,
+} from '../src/services/pushNotifications';
+import { notificationService } from '../src/services/notification.service';
 
 const OTA_LAST_APPLIED_UPDATE_ID_KEY = 'ota:lastAppliedUpdateId';
 
@@ -133,6 +140,40 @@ function RootLayoutContent() {
       router.replace('/(auth)/login');
     }
   }, [isInitialized, isAuthenticated, router, serverStatus]);
+
+  // ─── Push ──────────────────────────────────────────────────────────────────
+  // Registered once per signed-in session. A push that lands while the app is
+  // open refreshes the badge.
+  const [pendingPush, setPendingPush] = useState<PushTap | null>(null);
+
+  useEffect(() => {
+    if (isAuthenticated) void registerForPushNotifications();
+  }, [isAuthenticated]);
+
+  useEffect(
+    () =>
+      listenForNotifications({
+        onOpen: setPendingPush,
+        onReceive: () => void queryClient.invalidateQueries({ queryKey: queryKeys.notifications.all }),
+      }),
+    []
+  );
+
+  // A tapped push is held until the session is ready. On a cold start the tap
+  // arrives while this layout still shows the loading spinner — there is no
+  // navigator to push onto yet, and the redirect to Home above would replace
+  // whatever it opened. Declared after that redirect, so it runs after it.
+  useEffect(() => {
+    if (!pendingPush || !isInitialized || !isAuthenticated || serverStatus !== 'healthy') return;
+    setPendingPush(null);
+    router.push(pendingPush.href);
+    if (pendingPush.notificationId) {
+      notificationService
+        .markRead(pendingPush.notificationId)
+        .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.notifications.all }))
+        .catch(() => undefined);
+    }
+  }, [pendingPush, isInitialized, isAuthenticated, serverStatus, router]);
 
   if (!isInitialized) {
     return (

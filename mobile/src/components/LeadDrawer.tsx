@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { colors } from '../theme';
 
 const DRAWER_WIDTH = Dimensions.get('window').width * 0.78;
@@ -28,6 +29,7 @@ interface Props {
  */
 export function LeadDrawer({ visible, onClose }: Props) {
   const router = useRouter();
+  const { t } = useTranslation();
   const translateX = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
 
   useEffect(() => {
@@ -65,12 +67,13 @@ export function LeadDrawer({ visible, onClose }: Props) {
   const directItems = [
     { label: 'Meeting', icon: 'people-circle-outline' as const, onPress: () => nav('/meeting/list') },
     { label: 'BookMarks', icon: 'bookmark-outline' as const, onPress: () => nav('/bookmarks') },
+    { label: t('drawer.notifications'), icon: 'notifications-outline' as const, onPress: () => nav('/notifications') },
+    { label: t('drawer.quickReplies'), icon: 'chatbubble-outline' as const, onPress: () => nav('/quick-replies') },
+    { label: t('drawer.documents'), icon: 'document-outline' as const, onPress: () => nav('/documents') },
   ];
 
   const comingSoon = [
     { label: 'Call Tracking', icon: 'call-outline' as const },
-    { label: 'Quick Replies', icon: 'chatbubble-outline' as const },
-    { label: 'Document', icon: 'document-outline' as const },
     { label: 'Announcement', icon: 'megaphone-outline' as const },
     { label: 'Attendance', icon: 'calendar-outline' as const },
   ];

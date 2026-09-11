@@ -98,9 +98,11 @@ export const LEAD_STAGES = {
   ASSIGN_LEAD: 'assign_lead',
   CALL_AGAIN: 'call_again',
   FOLLOW_UP: 'follow_up',
+  QUALIFIED: 'qualified',
   IN_PROGRESS: 'in_progress',
   INTERESTED: 'interested',
   MEETING: 'meeting',
+  PROPOSAL_SENT: 'proposal_sent',
   PIPELINE: 'pipeline',
   POSTPONED: 'postponed',
   ORDER_RECEIVED: 'order_received',
@@ -109,15 +111,24 @@ export const LEAD_STAGES = {
 
 export type LeadStage = (typeof LEAD_STAGES)[keyof typeof LEAD_STAGES];
 
-/** Ordered for UI: the sequence the filter tabs are rendered in. */
+/**
+ * Ordered for UI: the sequence the filter tabs are rendered in.
+ *
+ * `qualified` and `proposal_sent` were added for parity with the reference
+ * app's tabs. Adding a stage is additive — no stored lead changes — but it is a
+ * code change on purpose: the transition guard and the mobile UI depend on it
+ * (CONFIGURATION-AND-PLANS §6).
+ */
 export const LEAD_STAGE_ORDER: LeadStage[] = [
   'new',
   'assign_lead',
   'call_again',
   'follow_up',
+  'qualified',
   'in_progress',
   'interested',
   'meeting',
+  'proposal_sent',
   'pipeline',
   'postponed',
   'order_received',
@@ -252,6 +263,8 @@ export const AUDIT_ACTIONS = {
   USER_CREATED: 'user_created',
   USER_UPDATED: 'user_updated',
   USER_DEACTIVATED: 'user_deactivated',
+  USER_ACTIVATED: 'user_activated',
+  USER_PASSWORD_RESET: 'user_password_reset',
   ORG_CREATED: 'org_created',
   ORG_STATUS_CHANGED: 'org_status_changed',
   ORG_PLAN_CHANGED: 'org_plan_changed',
