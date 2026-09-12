@@ -300,7 +300,7 @@ Honest record of what does not yet enforce the above. Each is a **Target**.
 | No test framework | `ENG-18`–`ENG-21` rest on discipline alone | testing |
 | No ESLint/Prettier config | `ENG-2`, `ENG-8` are unenforced; `toJSON.ts` already carries an `eslint-disable` for a linter that is not wired up | style, `any` |
 | No CI pipeline | Nothing runs typecheck or smoke on a PR | `ENG-30` |
-| No Dockerfile or IaC | Deployment is manual and unreproducible | release |
+| No Dockerfile or IaC | The dashboard (Vercel) and mobile (EAS) builds are reproducible from committed config, and [docs/DEPLOYMENT.md](../DEPLOYMENT.md) documents the whole topology — but the backend host is still provisioned by hand | release |
 | Tenant `AuditLog` never written | Model, indexes and 365-day TTL exist but nothing writes or reads them; only the platform-side log works | compliance |
 
 Wiring CI to run `typecheck` + `smoke` is the highest-value single step, because

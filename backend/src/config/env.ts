@@ -93,4 +93,37 @@ export const env = {
     .filter(Boolean),
 } as const;
 
+/**
+ * CORS is load-bearing in production, so an empty allowlist is a defect.
+ *
+ * The dashboard is deployed to its own domain and calls this API cross-origin,
+ * which means the browser sends an `Origin` header and the allowlist in
+ * `plugins/security.ts` decides the request. Booting with `CORS_ORIGINS` unset
+ * leaves that list empty, so every dashboard request is rejected at the
+ * preflight — an outage that shows up only in a browser, never in the curl or
+ * smoke-test paths that send no `Origin` at all.
+ *
+ * The development escape hatch in `security.ts` covers localhost only and does
+ * not apply here.
+ */
+if (env.isProduction) {
+  if (env.corsOrigins.length === 0) {
+    console.error(
+      '\nInvalid environment configuration:\n' +
+        '  • CORS_ORIGINS: required in production — set it to the dashboard origin(s), ' +
+        'comma-separated, e.g. https://dashboard.example.com\n'
+    );
+    process.exit(1);
+  }
+
+  const insecure = env.corsOrigins.filter((origin) => !origin.startsWith('https://'));
+  if (insecure.length > 0) {
+    console.error(
+      '\nInvalid environment configuration:\n' +
+        `  • CORS_ORIGINS: every production origin must be absolute https — got ${insecure.join(', ')}\n`
+    );
+    process.exit(1);
+  }
+}
+
 export type Env = typeof env;

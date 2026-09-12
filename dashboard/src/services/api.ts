@@ -4,6 +4,7 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from 'axios';
 import type { ApiError } from '@/types';
+import { PLATFORM_BASE_URL } from '@/config/env';
 
 const ACCESS_KEY = 'leadbee.platform.access';
 const REFRESH_KEY = 'leadbee.platform.refresh';
@@ -26,7 +27,7 @@ export const tokenStore = {
 };
 
 export const api: AxiosInstance = axios.create({
-  baseURL: '/api/v1/platform',
+  baseURL: PLATFORM_BASE_URL,
   timeout: 30_000,
   headers: { 'Content-Type': 'application/json' },
 });
@@ -53,11 +54,14 @@ async function refreshAccessToken(): Promise<string> {
   if (!refreshToken) throw new Error('No refresh token');
 
   // Bare axios, not `api` — going through the instance would re-enter this
-  // interceptor and loop.
+  // interceptor and loop. Bare axios also means no `baseURL`, so this URL has
+  // to be absolute in its own right: a relative path here would resolve against
+  // the dashboard's own origin and miss the API entirely once the two are not
+  // the same host.
   const { data } = await axios.post<{
     success: true;
     data: { accessToken: string; refreshToken: string };
-  }>('/api/v1/platform/auth/refresh', { refreshToken });
+  }>(`${PLATFORM_BASE_URL}/auth/refresh`, { refreshToken });
 
   tokenStore.set(data.data.accessToken, data.data.refreshToken);
   return data.data.accessToken;

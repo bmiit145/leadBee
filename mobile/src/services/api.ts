@@ -32,7 +32,29 @@ const DEFAULT_API_BASE_URL =
  */
 const resolveApiBaseUrl = (): string => {
   const configuredUrl = process.env.EXPO_PUBLIC_API_URL?.trim();
-  return configuredUrl || DEFAULT_API_BASE_URL;
+  if (configuredUrl) return configuredUrl;
+
+  /**
+   * Refuse to fall back on a shipped build.
+   *
+   * `EXPO_PUBLIC_*` is inlined at build time, so an EAS profile whose
+   * environment is missing `EXPO_PUBLIC_API_URL` produces a binary pinned to
+   * the emulator default below — `10.0.2.2` on Android, `localhost` on iOS.
+   * Neither is reachable from a real handset, so every request fails with a
+   * network error that looks like a broken API rather than a broken build.
+   *
+   * Failing at launch puts that discovery in internal distribution, where the
+   * fix is one `eas env:create` away, instead of in the store.
+   */
+  const environment = process.env.EXPO_PUBLIC_ENVIRONMENT;
+  if (environment === 'production' || environment === 'staging') {
+    throw new Error(
+      `EXPO_PUBLIC_API_URL is not set for the "${environment}" build. ` +
+        'Set it on the matching EAS environment and rebuild — see docs/DEPLOYMENT.md.'
+    );
+  }
+
+  return DEFAULT_API_BASE_URL;
 };
 
 export const API_BASE_URL = resolveApiBaseUrl();

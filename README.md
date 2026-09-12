@@ -51,7 +51,7 @@ The seed refuses to create the demo tenant when `NODE_ENV=production`.
 
 ```bash
 cd backend
-npm run routes    # builds the app, prints all 75 routes — no database needed
+npm run routes    # builds the app, prints all 95 route entries — no database needed
 npm run smoke     # 52 assertions end-to-end against a live database
 ```
 
@@ -59,6 +59,22 @@ npm run smoke     # 52 assertions end-to-end against a live database
 full Fastify lifecycle and asserts, among other things, that a tenant holding a
 valid token and the exact id of another tenant's lead cannot read, update or
 delete it.
+
+## Deployment
+
+| Surface | Host |
+| --- | --- |
+| `backend/` | an always-on Node host — it is a long-running process, not a function |
+| `dashboard/` | Vercel, Root Directory `dashboard` |
+| `mobile/` | EAS Build and EAS Update |
+
+One origin has to agree in four places, and each is checked rather than
+trusted: `vite build` fails without `VITE_API_ORIGIN`, the API refuses to boot
+in production without an `https` `CORS_ORIGINS`, and a staging or production app
+build throws at launch without `EXPO_PUBLIC_API_URL`.
+
+Full instructions, including the first-deploy checklist, are in
+[docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).
 
 ## How tenancy works
 

@@ -15,7 +15,8 @@
     },
     "updates": {
       "enabled": true,
-      "fallbackToCacheTimeout": 0
+      "fallbackToCacheTimeout": 0,
+      "url": "https://u.expo.dev/c50a1543-6478-45e9-90d1-03ea970a0145"
     },
     "ios": {
       "supportsTablet": true,
