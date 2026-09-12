@@ -1,3 +1,4 @@
+import { Types } from 'mongoose';
 import { buildApp } from '../app.js';
 import { connectDatabase, disconnectDatabase } from '../config/database.js';
 import { Organization } from '../models/Organization.js';
@@ -5,6 +6,7 @@ import { User } from '../models/User.js';
 import { Lead } from '../models/Lead.js';
 import { Notification } from '../models/Notification.js';
 import { LeadDropReason } from '../models/LeadDropReason.js';
+import { PurposeOfInquiry } from '../models/PurposeOfInquiry.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { LEAD_STAGE_ORDER } from '../config/constants.js';
 import { withoutTenantScope } from '../lib/tenantContext.js';
@@ -379,6 +381,73 @@ async function main(): Promise<void> {
   check('Organizer can add a drop tag', ownerDropReason.statusCode === 201, ownerDropReason.json());
   const dropReasonId = ownerDropReason.json()?.data?._id as string;
 
+  // Projects and meeting purposes are company-wide vocabulary. They used to
+  // need nothing but a signed-in user, so any agent could rename the list
+  // everybody else picks from.
+  const agentProject = await app.inject({
+    method: 'POST',
+    url: '/api/v1/projects',
+    headers: agentAuth,
+    payload: { name: `Smoke project ${Date.now()}` },
+  });
+  check('Agent cannot create a company-wide project', agentProject.statusCode === 403, agentProject.statusCode);
+
+  const purposeName = `Smoke purpose ${Date.now()}`;
+  const agentPurpose = await app.inject({
+    method: 'POST',
+    url: '/api/v1/purposes',
+    headers: agentAuth,
+    payload: { name: purposeName },
+  });
+  check('Agent cannot add a meeting purpose', agentPurpose.statusCode === 403, agentPurpose.statusCode);
+
+  const ownerPurpose = await app.inject({
+    method: 'POST',
+    url: '/api/v1/purposes',
+    headers: ownerAuth,
+    payload: { name: purposeName },
+  });
+  check('Organizer can add a meeting purpose', ownerPurpose.statusCode === 201, ownerPurpose.json());
+  const purposeId = ownerPurpose.json()?.data?._id as string;
+
+  // The app has always called these two; until now neither route existed, so
+  // renaming and drag-to-reorder failed with a 404 nobody surfaced.
+  const renamedPurpose = `${purposeName} renamed`;
+  const purposeRename = await app.inject({
+    method: 'PUT',
+    url: `/api/v1/purposes/${purposeId}`,
+    headers: ownerAuth,
+    payload: { name: renamedPurpose },
+  });
+  check(
+    'Organizer can rename a meeting purpose',
+    purposeRename.statusCode === 200 && purposeRename.json()?.data?.name === renamedPurpose,
+    purposeRename.json()
+  );
+
+  const purposeReorder = await app.inject({
+    method: 'PUT',
+    url: '/api/v1/purposes/reorder',
+    headers: ownerAuth,
+    payload: { orderedIds: [purposeId] },
+  });
+  const reordered = await withoutTenantScope('smoke test verification', () =>
+    PurposeOfInquiry.findById(purposeId).lean()
+  );
+  check(
+    'Reorder writes the new sort position',
+    purposeReorder.statusCode === 200 && reordered?.sortOrder === 0,
+    reordered?.sortOrder
+  );
+
+  const agentReorder = await app.inject({
+    method: 'PUT',
+    url: '/api/v1/purposes/reorder',
+    headers: agentAuth,
+    payload: { orderedIds: [purposeId] },
+  });
+  check('Agent cannot reorder meeting purposes', agentReorder.statusCode === 403, agentReorder.statusCode);
+
   // ─── CROSS-TENANT ISOLATION ─────────────────────────────────────────────────
   section('Cross-tenant isolation (the one that matters)');
 
@@ -489,6 +558,25 @@ async function main(): Promise<void> {
     'Tenant B cannot remove tenant A’s drop tag by id',
     crossDropReason.statusCode === 404,
     crossDropReason.statusCode
+  );
+
+  // Reorder writes through a single `updateMany`, so the tenant plugin filters
+  // it. Tenant B's owner clears the organizer guard — only the scope stops the
+  // write, which is exactly the property worth asserting. A throwaway id takes
+  // position 0, so tenant A's purpose would move to 1 if the scope leaked.
+  const crossReorder = await app.inject({
+    method: 'PUT',
+    url: '/api/v1/purposes/reorder',
+    headers: tenantBAuth,
+    payload: { orderedIds: [new Types.ObjectId().toString(), purposeId] },
+  });
+  const stillFirst = await withoutTenantScope('smoke test verification', () =>
+    PurposeOfInquiry.findById(purposeId).lean()
+  );
+  check(
+    'Tenant B cannot reorder tenant A’s meeting purposes',
+    crossReorder.statusCode === 200 && stillFirst?.sortOrder === 0,
+    stillFirst?.sortOrder
   );
 
   // Verify at the data layer too: tenant A's lead genuinely still says what it did.
@@ -629,11 +717,13 @@ async function main(): Promise<void> {
     await Lead.deleteMany({ organizationId: orgB!._id });
     await User.deleteMany({ organizationId: orgB!._id });
     await LeadDropReason.deleteMany({ organizationId: orgB!._id });
+    await PurposeOfInquiry.deleteMany({ organizationId: orgB!._id });
     await Notification.deleteMany({ organizationId: orgB!._id });
     await Organization.deleteOne({ _id: orgB!._id });
     await Lead.deleteOne({ _id: leadId });
     await Notification.deleteMany({ entityId: leadId });
     await LeadDropReason.deleteOne({ _id: dropReasonId });
+    await PurposeOfInquiry.deleteOne({ _id: purposeId });
   });
 
   await app.close();

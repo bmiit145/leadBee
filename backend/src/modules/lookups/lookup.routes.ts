@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { Types } from 'mongoose';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { Project } from '../../models/Project.js';
@@ -12,6 +13,7 @@ import {
   idParam,
   listEnvelope,
   messageEnvelope,
+  objectIdSchema,
   okEnvelope,
   paginationQuery,
 } from '../../lib/schemas.js';
@@ -29,10 +31,16 @@ import { requireUserId } from '../../lib/tenantContext.js';
 
 const security = [{ tenantToken: [] }];
 
-/** More than any business tracks as distinct loss reasons. */
-const DROP_REASON_CAP = 200;
+/**
+ * Reference lists feed pickers that render every option, so they are capped
+ * rather than paged — a list long enough to page is not a usable picker. The
+ * cap exists so an unbounded read can never be the thing that falls over
+ * (ENG-15); it is far above what any business curates.
+ */
+const LOOKUP_CAP = 200;
 
 const dropReasonBody = z.object({ name: z.string().trim().min(1).max(80) });
+const purposeBody = z.object({ name: z.string().trim().min(1).max(80) });
 
 /**
  * Small tenant-owned reference lists — projects, meeting purposes, quick
@@ -82,15 +90,21 @@ export async function lookupRoutes(app: FastifyInstance): Promise<void> {
       response: { 200: okEnvelope, ...commonErrors },
     },
     handler: async () =>
-      ok(await Project.find({ isActive: true }).sort({ sortOrder: 1, name: 1 }).lean()),
+      ok(
+        await Project.find({ isActive: true })
+          .sort({ sortOrder: 1, name: 1 })
+          .limit(LOOKUP_CAP)
+          .lean()
+      ),
   });
 
   r.route({
     method: 'POST',
     url: '/projects',
+    preHandler: [app.requireOrganizer],
     schema: {
       tags: ['lookups'],
-      summary: 'Create a lead grouping',
+      summary: 'Create a lead grouping (organizers only)',
       security,
       body: z.object({
         name: z.string().trim().min(1).max(80),
@@ -111,9 +125,10 @@ export async function lookupRoutes(app: FastifyInstance): Promise<void> {
   r.route({
     method: 'PUT',
     url: '/projects/:id',
+    preHandler: [app.requireOrganizer],
     schema: {
       tags: ['lookups'],
-      summary: 'Update a lead grouping',
+      summary: 'Update a lead grouping (organizers only)',
       security,
       params: idParam,
       body: z.object({
@@ -149,6 +164,7 @@ export async function lookupRoutes(app: FastifyInstance): Promise<void> {
       ok(
         await PurposeOfInquiry.find({ isActive: true })
           .sort({ sortOrder: 1, name: 1 })
+          .limit(LOOKUP_CAP)
           .lean()
       ),
   });
@@ -156,11 +172,12 @@ export async function lookupRoutes(app: FastifyInstance): Promise<void> {
   r.route({
     method: 'POST',
     url: '/purposes',
+    preHandler: [app.requireOrganizer],
     schema: {
       tags: ['lookups'],
-      summary: 'Add a meeting purpose',
+      summary: 'Add a meeting purpose (organizers only)',
       security,
-      body: z.object({ name: z.string().trim().min(1).max(80) }),
+      body: purposeBody,
       response: { 201: okEnvelope, ...commonErrors },
     },
     handler: async (request, reply) => {
@@ -172,12 +189,67 @@ export async function lookupRoutes(app: FastifyInstance): Promise<void> {
     },
   });
 
+  // Declared before `/purposes/:id` for readers; the router would prefer the
+  // static segment either way.
+  r.route({
+    method: 'PUT',
+    url: '/purposes/reorder',
+    preHandler: [app.requireOrganizer],
+    schema: {
+      tags: ['lookups'],
+      summary: 'Reorder meeting purposes (organizers only)',
+      description:
+        'Takes the ids in the order they should appear. Ids that are not this ' +
+        "tenant's are ignored rather than rejected: the list the app dragged " +
+        'may be a moment stale, and a reorder is not worth failing over.',
+      security,
+      body: z.object({ orderedIds: z.array(objectIdSchema).min(1).max(LOOKUP_CAP) }),
+      response: { 200: messageEnvelope, ...commonErrors },
+    },
+    handler: async (request) => {
+      const ids = request.body.orderedIds.map((id) => new Types.ObjectId(id));
+      // One `updateMany` rather than a write per row: it goes through the
+      // tenant plugin (which does not hook `bulkWrite`), and the whole list
+      // moves at once instead of leaving a half-applied order behind. The
+      // pipeline reads each row's new position out of the id list itself.
+      await PurposeOfInquiry.updateMany({ _id: { $in: ids } }, [
+        { $set: { sortOrder: { $indexOfArray: [ids, '$_id'] } } },
+      ]);
+      return message('Purposes reordered');
+    },
+  });
+
+  r.route({
+    method: 'PUT',
+    url: '/purposes/:id',
+    preHandler: [app.requireOrganizer],
+    schema: {
+      tags: ['lookups'],
+      summary: 'Rename a meeting purpose (organizers only)',
+      description: 'Meetings reference the purpose by id, so they follow the new name.',
+      security,
+      params: idParam,
+      body: purposeBody,
+      response: { 200: okEnvelope, ...commonErrors, 409: commonErrors[400] },
+    },
+    handler: async (request) => {
+      const purpose = await PurposeOfInquiry.findByIdAndUpdate(
+        request.params.id,
+        { name: request.body.name },
+        { new: true, runValidators: true }
+      );
+      if (!purpose) throw AppError.notFound('Purpose not found');
+      return ok(purpose);
+    },
+  });
+
   r.route({
     method: 'DELETE',
     url: '/purposes/:id',
+    preHandler: [app.requireOrganizer],
     schema: {
       tags: ['lookups'],
-      summary: 'Retire a meeting purpose',
+      summary: 'Retire a meeting purpose (organizers only)',
       description:
         'Deactivates rather than deletes — past meetings reference it, and a ' +
         'dangling reference would render as a blank purpose.',
@@ -211,7 +283,7 @@ export async function lookupRoutes(app: FastifyInstance): Promise<void> {
     handler: async () => {
       const reasons = await LeadDropReason.find()
         .sort({ sortOrder: 1, name: 1 })
-        .limit(DROP_REASON_CAP);
+        .limit(LOOKUP_CAP);
       return ok(reasons.map((reason) => reason.toJSON()));
     },
   });

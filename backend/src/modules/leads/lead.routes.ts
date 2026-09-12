@@ -123,8 +123,12 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
       response: { 201: okEnvelope, ...commonErrors, 402: commonErrors[400] },
     },
     handler: async (request, reply) => {
+      const viewer = viewerOf(request);
+      // Permission before quota: an agent who may not assign hears 403, not a
+      // 402 telling them to upgrade a plan that was never the problem.
+      leadService.assertMayAssignOnCreate(request.body.assignedTo, viewer);
       await organizationService.assertCanAddLead(request.auth!.organization);
-      const lead = await leadService.create(request.body, viewerOf(request));
+      const lead = await leadService.create(request.body, viewer);
       return reply.status(201).send(ok(lead));
     },
   });

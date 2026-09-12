@@ -73,19 +73,31 @@ const POPULATE_DETAIL = [
 ] as const;
 
 export const leadService = {
+  /**
+   * Handing a new lead to someone else *is* assignment, so it follows the same
+   * rule as PUT /leads/:id/assign: organizers only.
+   *
+   * Split out of `create` so the route can run it before the plan-limit check.
+   * A tenant at its lead limit must still hear "not allowed" rather than
+   * "upgrade your plan" — denied and degraded are different answers, and a
+   * refused request should not leak plan state (ENG-11). Pure and cheap, so
+   * `create` calls it too and remains safe called directly.
+   */
+  assertMayAssignOnCreate(requested: string | undefined, viewer: Viewer): void {
+    if (!requested || requested === viewer.userId.toString()) return;
+    if (!viewer.isOrganizer) {
+      throw AppError.forbidden('Only organizers can assign a lead to someone else');
+    }
+  },
+
   async create(data: Record<string, unknown>, viewer: Viewer): Promise<ILead> {
     const organizationId = requireOrganizationId();
 
     // A lead nobody owns is a lead nobody works. Default to the creator.
     let assignedTo = viewer.userId;
     const requested = data.assignedTo as string | undefined;
+    leadService.assertMayAssignOnCreate(requested, viewer);
     if (requested && requested !== viewer.userId.toString()) {
-      // Handing a new lead to someone else *is* assignment, so it follows the
-      // same rule as PUT /leads/:id/assign. Before this, any agent could create
-      // a lead straight into a colleague's book.
-      if (!viewer.isOrganizer) {
-        throw AppError.forbidden('Only organizers can assign a lead to someone else');
-      }
       assignedTo = await assertAssignable(requested);
     }
 

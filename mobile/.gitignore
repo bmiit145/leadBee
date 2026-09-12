@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
-package-lock.json
+# package-lock.json is committed on purpose. `mobile` is outside the npm
+# workspaces the root lockfile covers, so without its own lockfile two installs
+# of the same commit can resolve different versions — and a native module that
+# shifts under Expo is a broken build, not a warning (ENG-27).
 yarn.lock
 pnpm-lock.yaml
 

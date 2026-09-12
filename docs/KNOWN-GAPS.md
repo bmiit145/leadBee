@@ -10,6 +10,9 @@ it lives, how to fix it and when it counts as done. When you fix one, tick it,
 link the PR, and leave it here for a release before deleting it. Rule IDs refer
 to [docs/standards](./standards/README.md).
 
+**Fixed on 2026-09-12, still uncommitted:** 2.2, 2.6, 3.6, 3.7, 4.1 and the
+version string in 4.3. Each is ticked below with what changed.
+
 | Priority | Meaning |
 | --- | --- |
 | **P0** | Blocks shipping the current changes to real users |
@@ -91,7 +94,7 @@ to [docs/standards](./standards/README.md).
 - **Done when.** An organizer can see, for one member, every access change with
   actor, time, before and after.
 
-### [ ] 2.2 Creating a lead checks the plan limit before permission — P1
+### [x] 2.2 Creating a lead checks the plan limit before permission — P1
 
 - **What.** `POST /leads` in [lead.routes.ts](../backend/src/modules/leads/lead.routes.ts)
   runs `assertCanAddLead` (402) before `leadService.create` checks whether a
@@ -105,6 +108,10 @@ to [docs/standards](./standards/README.md).
   the route.
 - **Done when.** The smoke check "agent cannot create a lead into someone
   else's book" returns 403 even when the tenant is at its lead limit.
+- **Fixed 2026-09-12.** `leadService.assertMayAssignOnCreate` is exported and
+  called first in the route; `create` still calls it, so the service is safe on
+  its own. Five unit tests in
+  [lead.service.test.ts](../backend/src/modules/leads/lead.service.test.ts).
 
 ### [ ] 2.3 One push device per user — P2
 
@@ -132,7 +139,7 @@ to [docs/standards](./standards/README.md).
   tenant. The job needs an ADR: it is new infrastructure, and it is a
   cross-tenant read (ARCH-4).
 
-### [ ] 2.6 The unread badge polls while the app is in the background — P2
+### [x] 2.6 The unread badge polls while the app is in the background — P2
 
 - **What.** [useUnreadNotifications.ts](../mobile/src/hooks/useUnreadNotifications.ts)
   refetches every 60 seconds. TanStack Query is not told when the app is
@@ -140,6 +147,8 @@ to [docs/standards](./standards/README.md).
 - **Fix.** Wire `focusManager` to `AppState` in
   [queryClient.ts](../mobile/src/lib/queryClient.ts). That also enables
   refetch-on-focus everywhere.
+- **Fixed 2026-09-12.** `queryClient.ts` subscribes `focusManager` to
+  `AppState` (skipped on web, whose own visibility handling is correct).
 
 ### [ ] 2.7 Documents are links, not uploads — P2
 
@@ -202,15 +211,18 @@ to [docs/standards](./standards/README.md).
   should come from `leads.stages.*` / `leads.sources.*` keys, not
   `LEAD_STAGE_META.label`.
 
-### [ ] 3.6 Mobile lockfile is not committed — P1 (ENG-27)
+### [x] 3.6 Mobile lockfile is not committed — P1 (ENG-27)
 
 - **What.** [mobile/.gitignore](../mobile/.gitignore) ignores `package-lock.json`,
   so installs are not reproducible. `expo-notifications` is recorded only in the
   ignored file.
 - **Fix.** Remove the ignore line and commit `mobile/package-lock.json` in its
   own PR.
+- **Fixed 2026-09-12.** The ignore line is gone, replaced by a comment saying
+  why the file is kept. The lockfile itself is now untracked-and-visible; add it
+  in its own commit, since it is a large file and belongs on its own.
 
-### [ ] 3.7 Some lookup writes have no permission guard — P1 (ENG-25, BE-11)
+### [x] 3.7 Some lookup writes have no permission guard — P1 (ENG-25, BE-11)
 
 - **What.** In [lookup.routes.ts](../backend/src/modules/lookups/lookup.routes.ts),
   `POST /projects`, `PUT /projects/:id`, `POST /purposes` and
@@ -219,6 +231,12 @@ to [docs/standards](./standards/README.md).
   `GET /projects` are unbounded (ENG-15).
 - **Fix.** Add `requireOrganizer` (or `settings.manage`) to the writes; cap the
   lists as the drop-tag list does.
+- **Fixed 2026-09-12.** Every project and purpose write now carries
+  `requireOrganizer`, and both lists are capped at 200 like the drop tags. This
+  matches what the app already showed — the purposes screen and the purpose
+  picker on the lead form both gate their create and edit controls on
+  `isOrganizer` — so no screen loses a control it was offering. Smoke covers the
+  agent 403 on both.
 
 ### [ ] 3.8 The app works out permissions its own way — P2 (MOB-2)
 
@@ -235,13 +253,18 @@ to [docs/standards](./standards/README.md).
 
 ## 4. Broken or leftover endpoints
 
-### [ ] 4.1 Renaming and reordering purposes call routes that do not exist — P1
+### [x] 4.1 Renaming and reordering purposes call routes that do not exist — P1
 
 - **What.** [purpose.service.ts](../mobile/src/services/purpose.service.ts) calls
   `PUT /purposes/:id` and `PUT /purposes/reorder`. Neither is implemented, so
   editing and drag-to-reorder on the Service Create screen fail.
 - **Fix.** Add both routes (organizer-only; reorder takes an ordered id list and
   writes `sortOrder` in a single bulk write), or remove the controls.
+- **Fixed 2026-09-12.** Both routes exist, organizer-only. Reorder is a single
+  `updateMany` with a `$indexOfArray` pipeline rather than a `bulkWrite` — the
+  tenant plugin does not hook `bulkWrite`, so that would have been an unscoped
+  write. Smoke asserts the new sort position lands, that an agent is refused,
+  and that another tenant sending the same ids changes nothing.
 
 ### [ ] 4.2 Default-project leftovers — P2
 
@@ -259,6 +282,10 @@ to [docs/standards](./standards/README.md).
   drawer shows a hard-coded `v1.0.7`.
 - **Fix.** Hide the target and call cards until those features exist (see
   section 5). Show `Constants.expoConfig?.version`, as Settings already does.
+- **Partly fixed 2026-09-12.** The drawer reads the version from the manifest
+  now. The placeholder ₹0 target and `00` call cards are still there: they are
+  the shape of features 5.1 and 5.4, and removing them is a design call, not a
+  cleanup.
 
 ---
 
