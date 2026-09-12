@@ -138,6 +138,8 @@ leadSchema.index({ organizationId: 1, assignedTo: 1, stage: 1, createdAt: -1 });
 leadSchema.index({ organizationId: 1, isActive: 1, createdAt: -1 });
 // Stage/priority filter tabs.
 leadSchema.index({ organizationId: 1, stage: 1, priority: 1 });
+// Purpose of Inquiry filter.
+leadSchema.index({ organizationId: 1, interestedIn: 1, createdAt: -1 });
 // Reminder screen (today / tomorrow / overdue) and the overdue badge.
 leadSchema.index({ organizationId: 1, nextFollowUpAt: 1, stage: 1 });
 // Bookmarks screen.

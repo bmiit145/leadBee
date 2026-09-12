@@ -3,6 +3,7 @@ import { Task, type ITask, type TaskStatus } from '../../models/Task.js';
 import { AppError } from '../../lib/errors.js';
 import { nextDisplayNumber } from '../../lib/counters.js';
 import { pageParams } from '../../lib/pagination.js';
+import { notificationService } from '../notifications/notification.service.js';
 import type { Viewer } from '../leads/lead.service.js';
 
 export interface TaskFilters {
@@ -68,6 +69,16 @@ export const taskService = {
       createdBy: viewer.userId,
       origin: 'manual',
     });
+
+    await notificationService.notify({
+      type: 'task_assigned',
+      recipients: assignedTo,
+      actor: viewer,
+      entityId: task._id,
+      subject: task.subject,
+      at: task.endDate,
+    });
+
     return task.populate(POPULATE as unknown as string[]);
   },
 
@@ -146,12 +157,27 @@ export const taskService = {
     return task;
   },
 
-  async update(taskId: string, data: Record<string, unknown>): Promise<ITask> {
+  async update(taskId: string, data: Record<string, unknown>, viewer: Viewer): Promise<ITask> {
     const task = await Task.findOne({ _id: taskId, isActive: true });
     if (!task) throw AppError.notFound('Task not found');
 
+    const previousAssignees = new Set(task.assignedTo.map((id) => id.toString()));
     Object.assign(task, sanitize(data));
     await task.save();
+
+    // Only people newly added hear about it; re-saving a task must not re-alert
+    // everyone already on it.
+    if (Array.isArray(data.assignedTo)) {
+      await notificationService.notify({
+        type: 'task_assigned',
+        recipients: task.assignedTo.filter((id) => !previousAssignees.has(id.toString())),
+        actor: viewer,
+        entityId: task._id,
+        subject: task.subject,
+        at: task.endDate,
+      });
+    }
+
     return task.populate(POPULATE as unknown as string[]);
   },
 

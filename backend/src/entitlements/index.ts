@@ -38,13 +38,27 @@ export type EntitlementSource =
 export function entitlementsOf(source: EntitlementSource): EffectiveEntitlements {
   if (!source) return denyAll();
 
-  const candidate =
-    'features' in source && Array.isArray(source.features)
-      ? (source as EffectiveEntitlements)
-      : (source as { entitlements?: EffectiveEntitlements | null }).entitlements;
+  // An organization carries its snapshot under `entitlements` *and* a legacy
+  // `features: string[]` mirror at the top level. Testing for `features` first
+  // took every organization for a snapshot whose grants were bare strings, so
+  // every limit read as 0 and every lead or user create was refused with a
+  // plan-limit error. Look for the wrapper first, and accept only grant objects.
+  const candidate = 'entitlements' in source ? source.entitlements : source;
+  return isSnapshot(candidate) ? candidate : denyAll();
+}
 
-  if (!candidate || !Array.isArray(candidate.features)) return denyAll();
-  return candidate;
+function isSnapshot(value: unknown): value is EffectiveEntitlements {
+  if (!value || typeof value !== 'object') return false;
+  const { features } = value as { features?: unknown };
+  return (
+    Array.isArray(features) &&
+    features.every(
+      (grant) =>
+        typeof grant === 'object' &&
+        grant !== null &&
+        typeof (grant as { featureKey?: unknown }).featureKey === 'string'
+    )
+  );
 }
 
 function grantFor(source: EntitlementSource, featureKey: string): Grant | undefined {

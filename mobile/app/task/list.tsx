@@ -8,6 +8,7 @@ import { taskService } from '../../src/services/task.service';
 import { Task, TaskStatus } from '../../src/types';
 import { TASK_STATUS_META, TASK_STATUS_ORDER } from '../../src/config/taskMeeting';
 import { TaskCard } from '../../src/components/TaskCard';
+import { MemberFilter } from '../../src/components/MemberFilter';
 import {
   ScreenHeader,
   SearchBar,
@@ -29,14 +30,19 @@ export default function TaskListScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [assignBucket, setAssignBucket] = useState(false); // false = My Task
+  const [memberId, setMemberId] = useState<string | null>(null);
   const [status, setStatus] = useState<TaskStatus | ''>('');
   const [search, setSearch] = useState('');
 
-  const bucket = assignBucket ? 'assigned' : 'mine';
+  const bucket = assignBucket ? ('assigned' as const) : ('mine' as const);
+  // A picked member means "that person's tasks". The My/Assign toggle is about
+  // the viewer's own relationship to a task, so it has no say then — the API
+  // gives `bucket` precedence, which is why it is not sent at all.
+  const scope = memberId ? { assignedTo: memberId } : { bucket };
 
   const { data, isLoading, isFetching, refetch } = useQuery({
-    queryKey: ['tasks', bucket, status, search],
-    queryFn: () => taskService.getAll({ bucket, status: status || undefined, search: search || undefined }),
+    queryKey: ['tasks', memberId ?? bucket, status, search],
+    queryFn: () => taskService.getAll({ ...scope, status: status || undefined, search: search || undefined }),
   });
 
   return (
@@ -49,13 +55,16 @@ export default function TaskListScreen() {
       />
 
       <View style={styles.controls}>
+        <MemberFilter value={memberId} onChange={setMemberId} />
         <SearchBar value={search} onChangeText={setSearch} onFilterPress={() => {}} />
-        <SegmentedToggle
-          leftLabel="My Task"
-          rightLabel="Assign Task"
-          value={assignBucket}
-          onChange={setAssignBucket}
-        />
+        {memberId ? null : (
+          <SegmentedToggle
+            leftLabel="My Task"
+            rightLabel="Assign Task"
+            value={assignBucket}
+            onChange={setAssignBucket}
+          />
+        )}
       </View>
 
       <FilterTabs tabs={STATUS_TABS} value={status} onChange={setStatus} padCounts={false} />

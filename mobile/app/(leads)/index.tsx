@@ -21,6 +21,11 @@ import { colors, spacing, borderRadius } from '../../src/theme';
 import { ReminderFeedItem } from '../../src/components/ReminderFeedItem';
 import { SegmentedTabs } from '../../src/components/ui';
 import { LeadDrawer } from '../../src/components/LeadDrawer';
+import { ViewModeSwitchButton } from '../../src/components/ViewModeSwitch';
+import { NotificationBell } from '../../src/components/NotificationBell';
+import { userService } from '../../src/services/user.service';
+import { queryKeys } from '../../src/lib/queryKeys';
+import { useTranslation } from 'react-i18next';
 
 const HEADER_BG = '#111827';
 
@@ -72,16 +77,39 @@ function useAlertPillAnim(count: number) {
 function AdminLeadsHome({ stats }: { stats: LeadDashboardStats | undefined; userName: string }) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { t } = useTranslation();
+  const { hasPermission } = useAuth();
+
+  // Same keys as the Team, Profile and list screens, so each count is one
+  // shared request rather than a second copy of it.
+  const memberCount = useQuery({
+    queryKey: [...queryKeys.users.all, 'count', 'active'],
+    queryFn: async () => (await userService.listPage({ isActive: true, page: 1, limit: 1 })).total,
+    staleTime: 60_000,
+  });
+  const taskStats = useQuery({
+    queryKey: queryKeys.tasks.statusCounts,
+    queryFn: () => taskService.getStats(),
+    staleTime: 60_000,
+  });
+  const meetingTotal = useQuery({
+    queryKey: [...queryKeys.meetings.all, 'total'],
+    queryFn: async () => (await meetingService.getAll({ limit: 1 })).total,
+    staleTime: 60_000,
+    // Permission-gated server-side; asking without it only earns a 403.
+    enabled: hasPermission('meetings.view'),
+  });
 
   const tiles = [
-    { label: 'User\nManagement',  value: 0,             icon: 'person-outline' as const,   color: '#2196F3', bg: '#E3F2FD', onPress: () => {} },
+    { label: 'User\nManagement',  value: memberCount.data ?? 0, icon: 'person-outline' as const,   color: '#2196F3', bg: '#E3F2FD', onPress: () => router.push('/team') },
     { label: 'Leads\nManagement', value: stats?.total ?? 0, icon: 'people-outline' as const, color: '#4CAF50', bg: '#E8F5E9', onPress: () => router.push('/lead/list') },
-    { label: 'Task\nManagement',  value: 0,             icon: 'clipboard-outline' as const, color: '#9C27B0', bg: '#F3E5F5', onPress: () => router.push('/task/list') },
-    { label: 'Meeting\nManagement', value: 0,           icon: 'people-circle-outline' as const, color: '#FF9800', bg: '#FFF3E0', onPress: () => router.push('/meeting/list') },
+    { label: 'Task\nManagement',  value: taskStats.data?.total ?? 0, icon: 'clipboard-outline' as const, color: '#9C27B0', bg: '#F3E5F5', onPress: () => router.push('/task/list') },
+    { label: 'Meeting\nManagement', value: meetingTotal.data ?? 0, icon: 'people-circle-outline' as const, color: '#FF9800', bg: '#FFF3E0', onPress: () => router.push('/meeting/list') },
   ];
 
   const otherOptions = [
     { label: 'Service Create', subtitle: 'Manage purposes of inquiry', icon: 'settings-outline' as const, soon: false, onPress: () => router.push('/lead/services') },
+    { label: t('home.dropTags'), subtitle: t('home.dropTagsSubtitle'), icon: 'pricetags-outline' as const, soon: false, onPress: () => router.push('/lead/drop-reasons') },
     { label: 'Attendance',     subtitle: 'Track agent attendance',     icon: 'calendar-outline' as const,  soon: true,  onPress: () => {} },
     { label: 'Target & Earning', subtitle: 'Set agent targets',        icon: 'trending-up-outline' as const, soon: false, onPress: () => {} },
     { label: 'Reports',        subtitle: 'Lead analytics & performance', icon: 'bar-chart-outline' as const, soon: true,  onPress: () => {} },
@@ -96,7 +124,14 @@ function AdminLeadsHome({ stats }: { stats: LeadDashboardStats | undefined; user
     >
       {/* Header */}
       <View style={[styles.adminHeader, { paddingTop: insets.top + 12 }]}>
+        {/* Same width as the switch slot, so the title stays centred. */}
+        <View style={[styles.adminHeaderSide, styles.adminHeaderSideStart]}>
+          <NotificationBell style={styles.bellBtn} />
+        </View>
         <Text style={styles.adminHeaderTitle}>Home</Text>
+        <View style={styles.adminHeaderSide}>
+          <ViewModeSwitchButton style={styles.bellBtn} />
+        </View>
       </View>
 
       {/* Management tiles */}
@@ -274,9 +309,10 @@ function AgentLeadsHome({ stats, userName }: { stats: LeadDashboardStats | undef
               </Animated.View>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.bellBtn} activeOpacity={0.8}>
-              <Ionicons name="notifications-outline" size={21} color="#fff" />
-            </TouchableOpacity>
+            {/* Organizer previewing the agent view: the way back to admin. */}
+            <ViewModeSwitchButton style={styles.bellBtn} />
+
+            <NotificationBell style={styles.bellBtn} />
           </View>
 
         </View>
@@ -388,8 +424,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     paddingHorizontal: spacing.md,
     paddingBottom: 16,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
   },
+  adminHeaderSide: { width: 44, alignItems: 'flex-end' },
+  adminHeaderSideStart: { alignItems: 'flex-start' },
   adminHeaderTitle: { fontSize: 22, fontWeight: '800', color: '#fff' },
 
   // Tiles

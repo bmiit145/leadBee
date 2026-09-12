@@ -196,18 +196,30 @@ export const authService = {
     );
   },
 
-  /** Drop one session. Never errors on an unknown token — logout is idempotent. */
+  /**
+   * Drop one session. Never errors on an unknown token — logout is idempotent.
+   *
+   * The push token goes too. It belongs to a device, not a person: left in
+   * place, the next user to sign in on a shared handset would receive the
+   * previous user's lead and task alerts until they registered their own. A
+   * user on a second device loses push there until that app next starts and
+   * re-registers, which is the cheaper mistake.
+   */
   async logout(userId: Types.ObjectId, refreshToken?: string): Promise<void> {
-    if (!refreshToken) return;
     await User.updateOne(
       { _id: userId },
-      { $pull: { refreshTokens: hashToken(refreshToken) } }
+      refreshToken
+        ? { $pull: { refreshTokens: hashToken(refreshToken) }, $unset: { pushToken: 1 } }
+        : { $unset: { pushToken: 1 } }
     );
   },
 
   /** Drop every session — "sign out everywhere", and what a password change does. */
   async logoutAll(userId: Types.ObjectId): Promise<void> {
-    await User.updateOne({ _id: userId }, { $set: { refreshTokens: [] } });
+    await User.updateOne(
+      { _id: userId },
+      { $set: { refreshTokens: [] }, $unset: { pushToken: 1 } }
+    );
   },
 
   async changePassword(
@@ -229,7 +241,21 @@ export const authService = {
     await user.save();
   },
 
+  /**
+   * A push token names a device, not a person, so it belongs to one account.
+   *
+   * Registering takes it from whoever held it before — in any tenant, because
+   * one handset can be signed into different organizations over time. Clearing
+   * it on logout is not enough: a session that ends without reaching the server
+   * (revoked by an admin, expired while offline) left the old account holding
+   * the token, and its lead alerts, contact names included, kept arriving on
+   * the next user's phone. Keyed on the token alone, which the caller has just
+   * shown it holds.
+   */
   async updatePushToken(userId: Types.ObjectId, pushToken: string): Promise<void> {
+    await withoutTenantScope('push token moves to the account now signed in on its device', () =>
+      User.updateMany({ pushToken, _id: { $ne: userId } }, { $unset: { pushToken: 1 } }).exec()
+    );
     await User.updateOne({ _id: userId }, { $set: { pushToken } });
   },
 };

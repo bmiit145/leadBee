@@ -67,7 +67,6 @@ export interface User {
     permissions?: string[];
   };
   projects?: ProjectRef[];
-  defaultProject?: ProjectRef | string;
   permissions?: string[];
   avatarUrl?: string;
   designation?: string;
@@ -102,8 +101,8 @@ export type LeadSource =
   | 'website' | '99acres' | 'magicbricks' | 'housing' | 'other';
 
 export type LeadStage =
-  | 'new' | 'assign_lead' | 'call_again' | 'follow_up' | 'in_progress'
-  | 'interested' | 'meeting' | 'pipeline' | 'postponed'
+  | 'new' | 'assign_lead' | 'call_again' | 'follow_up' | 'qualified' | 'in_progress'
+  | 'interested' | 'meeting' | 'proposal_sent' | 'pipeline' | 'postponed'
   | 'order_received' | 'drop';
 
 export type LeadPriority = 'hot' | 'warm' | 'cold';
@@ -216,6 +215,14 @@ export interface LeadDocument {
   updatedAt: string;
 }
 
+/** A file in the cross-lead Document library, with enough of its lead to label
+ *  the row. `isActive` is false when the lead has since been deleted. */
+export interface LibraryDocument extends Omit<LeadDocument, 'lead'> {
+  lead:
+    | { _id: string; leadNumber: string; contactName: string; contactPhone: string; isActive: boolean }
+    | null;
+}
+
 export interface QuickReply {
   _id: string;
   createdByUser: string;
@@ -223,6 +230,31 @@ export interface QuickReply {
   message: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** A tag offered when a lead is closed as lost. Organizer-curated. */
+export interface LeadDropReason {
+  _id: string;
+  name: string;
+  sortOrder: number;
+}
+
+// ─── Notifications ──────────────────────────────────────────────────────────
+
+export type NotificationType = 'lead_assigned' | 'task_assigned' | 'meeting_assigned';
+export type NotificationEntity = 'lead' | 'task' | 'meeting';
+
+/** An inbox entry. Carries the event, not a sentence — the app translates it. */
+export interface AppNotification {
+  _id: string;
+  type: NotificationType;
+  entityType: NotificationEntity;
+  entityId: string;
+  actorName: string;
+  subject: string;
+  at?: string;
+  readAt?: string;
+  createdAt: string;
 }
 
 // ─── Task ───────────────────────────────────────────────────────────────────

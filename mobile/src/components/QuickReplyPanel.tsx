@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Linking, Alert, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Linking, Alert, ScrollView, Share } from 'react-native';
+import { useTranslation } from 'react-i18next';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { Ionicons } from '@expo/vector-icons';
 import { Menu } from 'react-native-paper';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -18,8 +20,9 @@ function toDialable(raw: string): string {
 }
 
 interface Props {
-  /** Lead's phone — the target of the WhatsApp send. */
-  phone: string;
+  /** The lead's phone, the WhatsApp target. Absent on the drawer's Quick Replies
+   *  screen, where there is no lead: a reply is shared through the system sheet. */
+  phone?: string;
 }
 
 /**
@@ -29,7 +32,9 @@ interface Props {
 export function QuickReplyPanel({ phone }: Props) {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
+  const { t } = useTranslation();
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search.trim());
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editing, setEditing] = useState<QuickReply | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
@@ -38,8 +43,8 @@ export function QuickReplyPanel({ phone }: Props) {
   const [message, setMessage] = useState('');
 
   const { data, isLoading } = useQuery({
-    queryKey: queryKeys.quickReplies.list(search),
-    queryFn: () => quickReplyService.list(search || undefined),
+    queryKey: queryKeys.quickReplies.list(debouncedSearch),
+    queryFn: () => quickReplyService.list(debouncedSearch || undefined),
   });
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.quickReplies.all });
@@ -75,10 +80,15 @@ export function QuickReplyPanel({ phone }: Props) {
     setSheetOpen(true);
   };
 
-  const send = (text: string) =>
+  const send = (text: string) => {
+    if (!phone) {
+      Share.share({ message: text }).catch(() => undefined);
+      return;
+    }
     Linking.openURL(`whatsapp://send?phone=${toDialable(phone)}&text=${encodeURIComponent(text)}`).catch(() =>
       Alert.alert('WhatsApp is not installed.'),
     );
+  };
 
   const rows = data ?? [];
 
@@ -146,7 +156,7 @@ export function QuickReplyPanel({ phone }: Props) {
                   leadingIcon="delete"
                 />
               </Menu>
-              <TouchableOpacity style={styles.sendBtn} onPress={() => send(qr.message)} accessibilityLabel="Send on WhatsApp">
+              <TouchableOpacity style={styles.sendBtn} onPress={() => send(qr.message)} accessibilityLabel={phone ? 'Send on WhatsApp' : t('quickReplies.share')}>
                 <Ionicons name="share-social" size={15} color="#1E8E5A" />
               </TouchableOpacity>
               </View>

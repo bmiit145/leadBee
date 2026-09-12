@@ -135,7 +135,7 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
       response: { 200: okEnvelope, ...commonErrors },
     },
     handler: async (request) =>
-      ok(await taskService.update(request.params.id, request.body)),
+      ok(await taskService.update(request.params.id, request.body, viewerOf(request))),
   });
 
   r.route({

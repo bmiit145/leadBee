@@ -2,10 +2,12 @@ import { Types, type FilterQuery } from 'mongoose';
 import { Lead, type ILead } from '../../models/Lead.js';
 import { CallLog, type ICallLog } from '../../models/CallLog.js';
 import { Organization } from '../../models/Organization.js';
+import { User } from '../../models/User.js';
 import { AppError } from '../../lib/errors.js';
 import { nextDisplayNumber } from '../../lib/counters.js';
 import { pageParams } from '../../lib/pagination.js';
 import { requireOrganizationId } from '../../lib/tenantContext.js';
+import { notificationService } from '../notifications/notification.service.js';
 import {
   LEAD_STAGE_ORDER,
   TERMINAL_LEAD_STAGES,
@@ -34,6 +36,8 @@ export interface LeadFilters {
   source?: string;
   assignedTo?: string;
   project?: string;
+  /** Purpose of Inquiry, matched exactly — the form stores the picked name. */
+  interestedIn?: string;
   search?: string;
   page?: number;
   limit?: number;
@@ -69,18 +73,42 @@ const POPULATE_DETAIL = [
 ] as const;
 
 export const leadService = {
+  /**
+   * Handing a new lead to someone else *is* assignment, so it follows the same
+   * rule as PUT /leads/:id/assign: organizers only.
+   *
+   * Split out of `create` so the route can run it before the plan-limit check.
+   * A tenant at its lead limit must still hear "not allowed" rather than
+   * "upgrade your plan" — denied and degraded are different answers, and a
+   * refused request should not leak plan state (ENG-11). Pure and cheap, so
+   * `create` calls it too and remains safe called directly.
+   */
+  assertMayAssignOnCreate(requested: string | undefined, viewer: Viewer): void {
+    if (!requested || requested === viewer.userId.toString()) return;
+    if (!viewer.isOrganizer) {
+      throw AppError.forbidden('Only organizers can assign a lead to someone else');
+    }
+  },
+
   async create(data: Record<string, unknown>, viewer: Viewer): Promise<ILead> {
     const organizationId = requireOrganizationId();
 
+    // A lead nobody owns is a lead nobody works. Default to the creator.
+    let assignedTo = viewer.userId;
+    const requested = data.assignedTo as string | undefined;
+    leadService.assertMayAssignOnCreate(requested, viewer);
+    if (requested && requested !== viewer.userId.toString()) {
+      assignedTo = await assertAssignable(requested);
+    }
+
+    // Validated before the number is taken, so a refused create does not burn
+    // a lead number.
     const leadNumber = await nextDisplayNumber('lead');
     const lead = await Lead.create({
       ...sanitize(data),
       leadNumber,
       createdBy: viewer.userId,
-      // A lead nobody owns is a lead nobody works. Default to the creator.
-      assignedTo: (data.assignedTo as string | undefined)
-        ? new Types.ObjectId(data.assignedTo as string)
-        : viewer.userId,
+      assignedTo,
       assignedBy: viewer.userId,
       assignedAt: new Date(),
     });
@@ -91,6 +119,14 @@ export const leadService = {
       { _id: organizationId },
       { $inc: { 'usage.leads': 1 }, $set: { 'usage.lastActivityAt': new Date() } }
     ).catch(() => undefined);
+
+    await notificationService.notify({
+      type: 'lead_assigned',
+      recipients: [assignedTo],
+      actor: viewer,
+      entityId: lead._id,
+      subject: lead.contactName,
+    });
 
     return lead.populate(POPULATE_LIST as unknown as string[]);
   },
@@ -109,6 +145,7 @@ export const leadService = {
     if (filters.stage) query.stage = filters.stage;
     if (filters.priority) query.priority = filters.priority;
     if (filters.source) query.source = filters.source;
+    if (filters.interestedIn) query.interestedIn = filters.interestedIn;
     if (filters.project) query.project = new Types.ObjectId(filters.project);
     if (filters.assignedTo && viewer.isOrganizer) {
       query.assignedTo = new Types.ObjectId(filters.assignedTo);
@@ -197,8 +234,41 @@ export const leadService = {
     if (!lead) throw AppError.notFound('Lead not found');
     assertCanSee(lead, viewer);
 
-    Object.assign(lead, sanitize(data));
+    const safe = sanitize(data);
+
+    // `assignedTo` is accepted here for the organizer's edit form, but it is
+    // still assignment: without this check the generic update was a way round
+    // the organizer-only /assign endpoint for any agent.
+    let reassignedTo: Types.ObjectId | undefined;
+    if (safe.assignedTo !== undefined) {
+      const requested = String(safe.assignedTo);
+      if (requested !== lead.assignedTo?.toString()) {
+        if (!viewer.isOrganizer) {
+          throw AppError.forbidden('Only organizers can reassign leads');
+        }
+        reassignedTo = await assertAssignable(requested);
+      }
+      delete safe.assignedTo;
+    }
+
+    Object.assign(lead, safe);
+    if (reassignedTo) {
+      lead.assignedTo = reassignedTo;
+      lead.assignedBy = viewer.userId;
+      lead.assignedAt = new Date();
+    }
     await lead.save();
+
+    if (reassignedTo) {
+      await notificationService.notify({
+        type: 'lead_assigned',
+        recipients: [reassignedTo],
+        actor: viewer,
+        entityId: lead._id,
+        subject: lead.contactName,
+      });
+    }
+
     return lead.populate(POPULATE_LIST as unknown as string[]);
   },
 
@@ -250,10 +320,24 @@ export const leadService = {
     const lead = await Lead.findOne({ _id: leadId, isActive: true });
     if (!lead) throw AppError.notFound('Lead not found');
 
-    lead.assignedTo = new Types.ObjectId(assignToUserId);
+    const assignee = await assertAssignable(assignToUserId);
+    const isChange = !lead.assignedTo?.equals(assignee);
+
+    lead.assignedTo = assignee;
     lead.assignedBy = viewer.userId;
     lead.assignedAt = new Date();
     await lead.save();
+
+    if (isChange) {
+      await notificationService.notify({
+        type: 'lead_assigned',
+        recipients: [assignee],
+        actor: viewer,
+        entityId: lead._id,
+        subject: lead.contactName,
+      });
+    }
+
     return lead.populate(POPULATE_LIST as unknown as string[]);
   },
 
@@ -350,12 +434,20 @@ export const leadService = {
    * Counts for the dashboard, in three aggregations rather than one per stage.
    * The tenant `$match` is prepended by the tenant plugin.
    */
-  async dashboardStats(viewer: Viewer, projectId?: string) {
+  async dashboardStats(
+    viewer: Viewer,
+    filters: { project?: string; assignedTo?: string } = {}
+  ) {
     const base: FilterQuery<ILead> = { isActive: true };
     if (!viewer.isOrganizer) {
       base.$or = [{ assignedTo: viewer.userId }, { createdBy: viewer.userId }];
+    } else if (filters.assignedTo) {
+      // One member's book, for the organizer's per-member view — the same
+      // meaning `assignedTo` has on the list, so tab counts match the rows.
+      // An agent is already confined to their own, so it is ignored for them.
+      base.assignedTo = new Types.ObjectId(filters.assignedTo);
     }
-    if (projectId) base.project = new Types.ObjectId(projectId);
+    if (filters.project) base.project = new Types.ObjectId(filters.project);
 
     const [byStage, byPriority, overdueFollowUps] = await Promise.all([
       Lead.aggregate([
@@ -413,6 +505,19 @@ function assertCanSee(
   const isOwner =
     lead.assignedTo?.toString() === uid || lead.createdBy?.toString() === uid;
   if (!isOwner) throw AppError.forbidden('Access denied');
+}
+
+/**
+ * A lead may only go to an active member of this organization. The lookup is
+ * tenant-scoped by the plugin, so another tenant's user id is simply not found;
+ * a deactivated user would otherwise collect leads nobody can see.
+ */
+async function assertAssignable(userId: string): Promise<Types.ObjectId> {
+  const user = await User.findOne({ _id: userId, isActive: true }).select('_id').lean();
+  if (!user) {
+    throw AppError.badRequest('The assignee must be an active member of this organization');
+  }
+  return user._id;
 }
 
 /**

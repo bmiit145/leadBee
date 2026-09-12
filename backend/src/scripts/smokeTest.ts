@@ -1,8 +1,14 @@
+import { Types } from 'mongoose';
 import { buildApp } from '../app.js';
 import { connectDatabase, disconnectDatabase } from '../config/database.js';
 import { Organization } from '../models/Organization.js';
 import { User } from '../models/User.js';
 import { Lead } from '../models/Lead.js';
+import { Notification } from '../models/Notification.js';
+import { LeadDropReason } from '../models/LeadDropReason.js';
+import { PurposeOfInquiry } from '../models/PurposeOfInquiry.js';
+import { AuditLog } from '../models/AuditLog.js';
+import { LEAD_STAGE_ORDER } from '../config/constants.js';
 import { withoutTenantScope } from '../lib/tenantContext.js';
 import '../models/index.js';
 
@@ -172,7 +178,7 @@ async function main(): Promise<void> {
   check('Dashboard stats return 200', stats.statusCode === 200);
   check(
     'Stats cover every stage in LEAD_STAGE_ORDER',
-    Object.keys(stats.json()?.data?.byStage ?? {}).length === 11,
+    Object.keys(stats.json()?.data?.byStage ?? {}).length === LEAD_STAGE_ORDER.length,
     Object.keys(stats.json()?.data?.byStage ?? {}).length
   );
 
@@ -248,6 +254,200 @@ async function main(): Promise<void> {
   });
   check('Agent cannot delete leads', agentDelete.statusCode === 403, agentDelete.statusCode);
 
+  const ownerId = login.json()?.data?.user?._id as string;
+  const agentId = agentLogin.json()?.data?.user?._id as string;
+
+  const agentHandoff = await app.inject({
+    method: 'POST',
+    url: '/api/v1/leads',
+    headers: agentAuth,
+    payload: { contactName: 'Agent Handoff', contactPhone: '9998887772', assignedTo: ownerId },
+  });
+  check(
+    'Agent cannot create a lead straight into someone else’s book',
+    agentHandoff.statusCode === 403,
+    agentHandoff.statusCode
+  );
+
+  const agentOwnLeadId = agentList.json()?.data?.[0]?._id as string | undefined;
+  const agentReassign = await app.inject({
+    method: 'PUT',
+    url: `/api/v1/leads/${agentOwnLeadId}`,
+    headers: agentAuth,
+    payload: { assignedTo: ownerId },
+  });
+  check(
+    'Agent cannot reassign a lead through the generic update',
+    agentReassign.statusCode === 403,
+    agentReassign.statusCode
+  );
+
+  const ownerAssigns = await app.inject({
+    method: 'PUT',
+    url: `/api/v1/leads/${leadId}/assign`,
+    headers: ownerAuth,
+    payload: { assignedTo: agentId },
+  });
+  check('Organizer can assign a lead to an agent', ownerAssigns.statusCode === 200, ownerAssigns.json());
+
+  const agentInbox = await app.inject({
+    method: 'GET',
+    url: '/api/v1/notifications',
+    headers: agentAuth,
+  });
+  const handoffNotice = (agentInbox.json()?.data ?? []).find(
+    (n: { type?: string; entityId?: string }) => n.type === 'lead_assigned' && n.entityId === leadId
+  ) as { _id: string } | undefined;
+  check('Assigning a lead notifies the assignee', Boolean(handoffNotice), agentInbox.json()?.total);
+
+  const unread = await app.inject({
+    method: 'GET',
+    url: '/api/v1/notifications/unread-count',
+    headers: agentAuth,
+  });
+  check('Unread count includes the new notification', (unread.json()?.data?.count ?? 0) > 0);
+
+  const ownerInboxRead = await app.inject({
+    method: 'PATCH',
+    url: `/api/v1/notifications/${handoffNotice?._id}/read`,
+    headers: ownerAuth,
+  });
+  check(
+    'A notification cannot be marked read by anyone but its recipient',
+    ownerInboxRead.statusCode === 404,
+    ownerInboxRead.statusCode
+  );
+
+  const selfReset = await app.inject({
+    method: 'POST',
+    url: `/api/v1/users/${ownerId}/reset-password`,
+    headers: ownerAuth,
+    payload: { newPassword: 'Password@123' },
+  });
+  check(
+    'Nobody resets their own password through user management',
+    selfReset.statusCode === 403,
+    selfReset.statusCode
+  );
+
+  const agentRecord = await app.inject({
+    method: 'GET',
+    url: `/api/v1/users/${agentId}`,
+    headers: ownerAuth,
+  });
+  const originalDesignation = (agentRecord.json()?.data?.designation as string | undefined) ?? '';
+  const smokeDesignation = `Smoke ${Date.now()}`;
+  const memberUpdate = await app.inject({
+    method: 'PUT',
+    url: `/api/v1/users/${agentId}`,
+    headers: ownerAuth,
+    payload: { designation: smokeDesignation },
+  });
+  check('Organizer can update a team member', memberUpdate.statusCode === 200, memberUpdate.json());
+
+  const auditEntry = await withoutTenantScope('smoke test verification', () =>
+    AuditLog.findOne({ entityId: agentId, action: 'user_updated' }).sort({ createdAt: -1 }).lean()
+  );
+  check(
+    'A team member change is written to the tenant audit trail, with only what changed',
+    auditEntry?.after?.designation === smokeDesignation &&
+      auditEntry?.actorName !== undefined &&
+      Object.keys(auditEntry?.after ?? {}).length === 1,
+    auditEntry?.after
+  );
+
+  await app.inject({
+    method: 'PUT',
+    url: `/api/v1/users/${agentId}`,
+    headers: ownerAuth,
+    payload: { designation: originalDesignation },
+  });
+
+  const dropReasonName = `Smoke drop reason ${Date.now()}`;
+  const agentDropReason = await app.inject({
+    method: 'POST',
+    url: '/api/v1/drop-reasons',
+    headers: agentAuth,
+    payload: { name: dropReasonName },
+  });
+  check('Agent cannot add drop tags', agentDropReason.statusCode === 403, agentDropReason.statusCode);
+
+  const ownerDropReason = await app.inject({
+    method: 'POST',
+    url: '/api/v1/drop-reasons',
+    headers: ownerAuth,
+    payload: { name: dropReasonName },
+  });
+  check('Organizer can add a drop tag', ownerDropReason.statusCode === 201, ownerDropReason.json());
+  const dropReasonId = ownerDropReason.json()?.data?._id as string;
+
+  // Projects and meeting purposes are company-wide vocabulary. They used to
+  // need nothing but a signed-in user, so any agent could rename the list
+  // everybody else picks from.
+  const agentProject = await app.inject({
+    method: 'POST',
+    url: '/api/v1/projects',
+    headers: agentAuth,
+    payload: { name: `Smoke project ${Date.now()}` },
+  });
+  check('Agent cannot create a company-wide project', agentProject.statusCode === 403, agentProject.statusCode);
+
+  const purposeName = `Smoke purpose ${Date.now()}`;
+  const agentPurpose = await app.inject({
+    method: 'POST',
+    url: '/api/v1/purposes',
+    headers: agentAuth,
+    payload: { name: purposeName },
+  });
+  check('Agent cannot add a meeting purpose', agentPurpose.statusCode === 403, agentPurpose.statusCode);
+
+  const ownerPurpose = await app.inject({
+    method: 'POST',
+    url: '/api/v1/purposes',
+    headers: ownerAuth,
+    payload: { name: purposeName },
+  });
+  check('Organizer can add a meeting purpose', ownerPurpose.statusCode === 201, ownerPurpose.json());
+  const purposeId = ownerPurpose.json()?.data?._id as string;
+
+  // The app has always called these two; until now neither route existed, so
+  // renaming and drag-to-reorder failed with a 404 nobody surfaced.
+  const renamedPurpose = `${purposeName} renamed`;
+  const purposeRename = await app.inject({
+    method: 'PUT',
+    url: `/api/v1/purposes/${purposeId}`,
+    headers: ownerAuth,
+    payload: { name: renamedPurpose },
+  });
+  check(
+    'Organizer can rename a meeting purpose',
+    purposeRename.statusCode === 200 && purposeRename.json()?.data?.name === renamedPurpose,
+    purposeRename.json()
+  );
+
+  const purposeReorder = await app.inject({
+    method: 'PUT',
+    url: '/api/v1/purposes/reorder',
+    headers: ownerAuth,
+    payload: { orderedIds: [purposeId] },
+  });
+  const reordered = await withoutTenantScope('smoke test verification', () =>
+    PurposeOfInquiry.findById(purposeId).lean()
+  );
+  check(
+    'Reorder writes the new sort position',
+    purposeReorder.statusCode === 200 && reordered?.sortOrder === 0,
+    reordered?.sortOrder
+  );
+
+  const agentReorder = await app.inject({
+    method: 'PUT',
+    url: '/api/v1/purposes/reorder',
+    headers: agentAuth,
+    payload: { orderedIds: [purposeId] },
+  });
+  check('Agent cannot reorder meeting purposes', agentReorder.statusCode === 403, agentReorder.statusCode);
+
   // ─── CROSS-TENANT ISOLATION ─────────────────────────────────────────────────
   section('Cross-tenant isolation (the one that matters)');
 
@@ -322,6 +522,61 @@ async function main(): Promise<void> {
     'Tenant B cannot read tenant A’s lead thread',
     crossThread.statusCode === 404,
     crossThread.statusCode
+  );
+
+  const crossNotification = await app.inject({
+    method: 'PATCH',
+    url: `/api/v1/notifications/${handoffNotice?._id}/read`,
+    headers: tenantBAuth,
+  });
+  check(
+    'Tenant B cannot touch tenant A’s notification by id',
+    crossNotification.statusCode === 404,
+    crossNotification.statusCode
+  );
+
+  const tenantBDropReasons = await app.inject({
+    method: 'GET',
+    url: '/api/v1/drop-reasons',
+    headers: tenantBAuth,
+  });
+  const tenantBReasonNames = (tenantBDropReasons.json()?.data ?? []).map(
+    (reason: { name: string }) => reason.name
+  );
+  check(
+    'A new tenant starts with its own drop tags, and never sees tenant A’s',
+    tenantBReasonNames.length > 0 && !tenantBReasonNames.includes(dropReasonName),
+    tenantBReasonNames
+  );
+
+  const crossDropReason = await app.inject({
+    method: 'DELETE',
+    url: `/api/v1/drop-reasons/${dropReasonId}`,
+    headers: tenantBAuth,
+  });
+  check(
+    'Tenant B cannot remove tenant A’s drop tag by id',
+    crossDropReason.statusCode === 404,
+    crossDropReason.statusCode
+  );
+
+  // Reorder writes through a single `updateMany`, so the tenant plugin filters
+  // it. Tenant B's owner clears the organizer guard — only the scope stops the
+  // write, which is exactly the property worth asserting. A throwaway id takes
+  // position 0, so tenant A's purpose would move to 1 if the scope leaked.
+  const crossReorder = await app.inject({
+    method: 'PUT',
+    url: '/api/v1/purposes/reorder',
+    headers: tenantBAuth,
+    payload: { orderedIds: [new Types.ObjectId().toString(), purposeId] },
+  });
+  const stillFirst = await withoutTenantScope('smoke test verification', () =>
+    PurposeOfInquiry.findById(purposeId).lean()
+  );
+  check(
+    'Tenant B cannot reorder tenant A’s meeting purposes',
+    crossReorder.statusCode === 200 && stillFirst?.sortOrder === 0,
+    stillFirst?.sortOrder
   );
 
   // Verify at the data layer too: tenant A's lead genuinely still says what it did.
@@ -461,8 +716,14 @@ async function main(): Promise<void> {
   await withoutTenantScope('smoke test cleanup', async () => {
     await Lead.deleteMany({ organizationId: orgB!._id });
     await User.deleteMany({ organizationId: orgB!._id });
+    await LeadDropReason.deleteMany({ organizationId: orgB!._id });
+    await PurposeOfInquiry.deleteMany({ organizationId: orgB!._id });
+    await Notification.deleteMany({ organizationId: orgB!._id });
     await Organization.deleteOne({ _id: orgB!._id });
     await Lead.deleteOne({ _id: leadId });
+    await Notification.deleteMany({ entityId: leadId });
+    await LeadDropReason.deleteOne({ _id: dropReasonId });
+    await PurposeOfInquiry.deleteOne({ _id: purposeId });
   });
 
   await app.close();

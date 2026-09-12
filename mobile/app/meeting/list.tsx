@@ -7,6 +7,7 @@ import { colors, spacing } from '../../src/theme';
 import { meetingService } from '../../src/services/meeting.service';
 import { Meeting } from '../../src/types';
 import { MeetingCard } from '../../src/components/MeetingCard';
+import { MemberFilter } from '../../src/components/MemberFilter';
 import { ScreenHeader, SearchBar, FilterTabs, EmptyState } from '../../src/components/ui';
 
 type Scope = 'all' | 'today' | 'tomorrow' | 'upcoming';
@@ -22,11 +23,16 @@ export default function MeetingsListScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [scope, setScope] = useState<Scope>('all');
+  const [memberId, setMemberId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
 
   const { data, isLoading, isFetching, refetch } = useQuery({
-    queryKey: ['meetings', scope],
-    queryFn: () => meetingService.getAll(scope === 'all' ? {} : { scope }),
+    queryKey: ['meetings', scope, memberId],
+    queryFn: () =>
+      meetingService.getAll({
+        ...(scope === 'all' ? {} : { scope }),
+        assignedTo: memberId ?? undefined,
+      }),
   });
 
   const meetings = useMemo(() => {
@@ -49,6 +55,7 @@ export default function MeetingsListScreen() {
       />
 
       <View style={styles.searchWrap}>
+        <MemberFilter value={memberId} onChange={setMemberId} />
         <SearchBar value={search} onChangeText={setSearch} onFilterPress={() => {}} />
       </View>
 
@@ -77,5 +84,5 @@ export default function MeetingsListScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
-  searchWrap: { padding: spacing.md, paddingBottom: spacing.sm },
+  searchWrap: { padding: spacing.md, paddingBottom: spacing.sm, gap: spacing.sm },
 });

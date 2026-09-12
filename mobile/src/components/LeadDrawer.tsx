@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -11,10 +11,19 @@ import {
   Dimensions,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { colors } from '../theme';
 
 const DRAWER_WIDTH = Dimensions.get('window').width * 0.78;
+
+/**
+ * Read from the manifest rather than typed in: a hard-coded version goes stale
+ * the first time nobody remembers to change it, and it is the number a user
+ * reads out when reporting a bug. Settings does the same.
+ */
+const APP_VERSION = Constants.expoConfig?.version;
 
 interface Props {
   visible: boolean;
@@ -28,7 +37,19 @@ interface Props {
  */
 export function LeadDrawer({ visible, onClose }: Props) {
   const router = useRouter();
+  const { t } = useTranslation();
   const translateX = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
+
+  /**
+   * The one section currently unfolded, or `null` for none — which is how the
+   * drawer opens. A menu that starts fully expanded is a list with decorative
+   * chevrons: it pushes the items below it off-screen and makes the reader scan
+   * leaves before they have picked a branch. One at a time also means the whole
+   * menu always fits, however many sections it grows.
+   */
+  const [openSection, setOpenSection] = useState<string | null>(null);
+  const toggleSection = (name: string) =>
+    setOpenSection((prev) => (prev === name ? null : name));
 
   useEffect(() => {
     Animated.timing(translateX, {
@@ -37,6 +58,12 @@ export function LeadDrawer({ visible, onClose }: Props) {
       useNativeDriver: true,
     }).start();
   }, [visible, translateX]);
+
+  // Every open starts from the same place. Picking an item navigates and closes
+  // the drawer, so an unfolded section is the state of one visit, not a setting.
+  useEffect(() => {
+    if (visible) setOpenSection(null);
+  }, [visible]);
 
   const nav = (path: string) => {
     onClose();
@@ -65,12 +92,13 @@ export function LeadDrawer({ visible, onClose }: Props) {
   const directItems = [
     { label: 'Meeting', icon: 'people-circle-outline' as const, onPress: () => nav('/meeting/list') },
     { label: 'BookMarks', icon: 'bookmark-outline' as const, onPress: () => nav('/bookmarks') },
+    { label: t('drawer.notifications'), icon: 'notifications-outline' as const, onPress: () => nav('/notifications') },
+    { label: t('drawer.quickReplies'), icon: 'chatbubble-outline' as const, onPress: () => nav('/quick-replies') },
+    { label: t('drawer.documents'), icon: 'document-outline' as const, onPress: () => nav('/documents') },
   ];
 
   const comingSoon = [
     { label: 'Call Tracking', icon: 'call-outline' as const },
-    { label: 'Quick Replies', icon: 'chatbubble-outline' as const },
-    { label: 'Document', icon: 'document-outline' as const },
     { label: 'Announcement', icon: 'megaphone-outline' as const },
     { label: 'Attendance', icon: 'calendar-outline' as const },
   ];
@@ -85,34 +113,50 @@ export function LeadDrawer({ visible, onClose }: Props) {
         <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
           <View style={styles.logoWrap}>
             <Image source={require('../../assets/logo.png')} style={styles.logo} resizeMode="contain" />
-            <Text style={styles.version}>v1.0.7</Text>
+            {APP_VERSION ? <Text style={styles.version}>v{APP_VERSION}</Text> : null}
           </View>
 
           <View style={styles.divider} />
 
-          {sections.map((section) => (
-            <View key={section.section}>
-              <View style={styles.sectionHeader}>
-                <View style={styles.sectionIcon}>
-                  <Ionicons name={section.icon} size={20} color={colors.primary} />
-                </View>
-                <Text style={styles.sectionLabel}>{section.section}</Text>
-                <Ionicons name="chevron-up" size={16} color={colors.textSecondary} />
-              </View>
-              {section.items.map((item) => (
+          {sections.map((section) => {
+            const isOpen = openSection === section.section;
+            return (
+              <View key={section.section}>
+                {/* The header carries a chevron, so it has to actually fold —
+                    it drew one either way before, and tapping it did nothing. */}
                 <TouchableOpacity
-                  key={item.label}
-                  style={styles.subItem}
-                  onPress={item.onPress}
+                  style={styles.sectionHeader}
+                  onPress={() => toggleSection(section.section)}
                   activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: isOpen }}
                 >
-                  <Ionicons name="chevron-forward-outline" size={14} color={colors.primary} style={{ marginLeft: 4 }} />
-                  <Text style={styles.subLabel}>{item.label}</Text>
+                  <View style={styles.sectionIcon}>
+                    <Ionicons name={section.icon} size={20} color={colors.primary} />
+                  </View>
+                  <Text style={styles.sectionLabel}>{section.section}</Text>
+                  <Ionicons
+                    name={isOpen ? 'chevron-up' : 'chevron-down'}
+                    size={16}
+                    color={colors.textSecondary}
+                  />
                 </TouchableOpacity>
-              ))}
-              <View style={styles.divider} />
-            </View>
-          ))}
+                {isOpen &&
+                  section.items.map((item) => (
+                    <TouchableOpacity
+                      key={item.label}
+                      style={styles.subItem}
+                      onPress={item.onPress}
+                      activeOpacity={0.75}
+                    >
+                      <Ionicons name="chevron-forward-outline" size={14} color={colors.primary} style={{ marginLeft: 4 }} />
+                      <Text style={styles.subLabel}>{item.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                <View style={styles.divider} />
+              </View>
+            );
+          })}
 
           {directItems.map((item) => (
             <TouchableOpacity
