@@ -161,6 +161,66 @@ export interface AuditEntry {
   createdAt: string;
 }
 
+// ─── Registered accounts ──────────────────────────────────────────────────────
+// People who registered in the app, before belonging to any organization.
+// See docs/adr/0003-pre-tenant-accounts.md.
+
+export type AccountStatus = 'active' | 'suspended';
+export type AccountVerificationFilter = 'verified' | 'unverified';
+
+export interface Account {
+  _id: string;
+  name: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  status: AccountStatus;
+  emailVerifiedAt: string | null;
+  emailVerifiedVia: 'code' | 'platform_admin' | null;
+  suspendedAt: string | null;
+  suspendedReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AccountActivityEntry {
+  _id: string;
+  action: string;
+  adminEmail: string;
+  adminRole: string;
+  reason: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface AccountDetail extends Account {
+  acceptedTermsAt: string | null;
+  signupIp: string | null;
+  signupUserAgent: string | null;
+  internalNotes: string;
+  suspendedBy: { _id: string; name: string; email: string } | null;
+  pendingVerification: {
+    sentAt: string;
+    expiresAt: string;
+    attempts: number;
+    maxAttempts: number;
+    expired: boolean;
+  } | null;
+  activity: AccountActivityEntry[];
+}
+
+export interface AccountStats {
+  total: number;
+  verified: number;
+  unverified: number;
+  suspended: number;
+  last7Days: number;
+  last30Days: number;
+  generatedAt: string;
+}
+
 // ─── API envelopes ────────────────────────────────────────────────────────────
 
 export interface ApiSingle<T> {

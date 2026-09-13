@@ -1,5 +1,13 @@
 import { NavLink } from 'react-router-dom';
-import { Building2, Layers, LayoutDashboard, ScrollText, Settings, X } from 'lucide-react';
+import {
+  Building2,
+  Layers,
+  LayoutDashboard,
+  ScrollText,
+  Settings,
+  UserRound,
+  X,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/stores/auth.store';
 
@@ -14,6 +22,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { to: '/overview', label: 'Overview', icon: LayoutDashboard, permission: 'metrics.view' },
   { to: '/organizations', label: 'Organizations', icon: Building2, permission: 'orgs.view' },
+  { to: '/accounts', label: 'Accounts', icon: UserRound, permission: 'accounts.view' },
   { to: '/plans', label: 'Plans', icon: Layers, permission: 'orgs.view' },
   { to: '/audit', label: 'Audit log', icon: ScrollText, permission: 'audit.view' },
   { to: '/settings', label: 'Settings', icon: Settings },

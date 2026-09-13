@@ -51,7 +51,7 @@ A new collection holding tenant data applies the plugin. That single line adds
 the field, stamps it on write, filters every read, and strips it from output.
 
 Anything not tenant-owned — `Organization`, `PlatformAdmin`,
-`PlatformAuditLog` — must say so in a comment explaining why.
+`PlatformAuditLog`, `Account` — must say so in a comment explaining why.
 
 ### BE-5 — Stamp required fields in `pre('validate')`, not `pre('save')` · MUST · Enforced
 

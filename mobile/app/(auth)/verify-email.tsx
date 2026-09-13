@@ -43,7 +43,9 @@ export default function VerifyEmailScreen() {
   const [error, setError] = useState<string | null>(null);
   const [verified, setVerified] = useState(false);
   const [cooldown, setCooldown] = useState(RESEND_COOLDOWN_SECONDS);
-  const [devCode, setDevCode] = useState<string | null>(null);
+  const [devCode, setDevCode] = useState<string | null>(
+    () => (email ? registrationService.devCodeFor(email) : undefined) ?? null
+  );
 
   const inputRef = useRef<RNTextInput>(null);
 
@@ -87,8 +89,10 @@ export default function VerifyEmailScreen() {
     try {
       setResending(true);
       setError(null);
-      const pendingVerification = await registrationService.resend(email);
-      setDevCode(pendingVerification.devCode ?? null);
+      await registrationService.resend(email);
+      // Read back from the service rather than the response: inside the
+      // cooldown no new code is issued and the previous one still stands.
+      setDevCode(registrationService.devCodeFor(email) ?? null);
       setCooldown(RESEND_COOLDOWN_SECONDS);
       setCode('');
     } catch (err) {
@@ -239,11 +243,11 @@ export default function VerifyEmailScreen() {
 
         {/* No mail is actually sent yet, so in a dev build the code is shown
             here. Guarded by __DEV__: a release build must never print it. */}
-        {__DEV__ && (
+        {__DEV__ && devCode && (
           <View style={styles.devHint}>
             <Ionicons name="construct-outline" size={14} color={colors.warning} />
             <Text style={styles.devHintText}>
-              {t('verifyEmail.devHint', { code: devCode ?? '123456' })}
+              {t('verifyEmail.devHint', { code: devCode })}
             </Text>
           </View>
         )}

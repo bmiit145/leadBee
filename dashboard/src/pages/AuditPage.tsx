@@ -47,7 +47,7 @@ export function AuditPage() {
                 <tr>
                   <Th>When</Th>
                   <Th>Action</Th>
-                  <Th>Organization</Th>
+                  <Th>Target</Th>
                   <Th>Admin</Th>
                   <Th>Detail</Th>
                 </tr>
@@ -74,6 +74,15 @@ export function AuditPage() {
                             className="text-[13px] text-[var(--text)] hover:underline"
                           >
                             {entry.organizationName ?? entry.organizationId}
+                          </Link>
+                        ) : entry.targetType === 'Account' && entry.targetId ? (
+                          // A deleted account's link lands on a not-found page,
+                          // which is the truthful answer for an erased person.
+                          <Link
+                            to={`/accounts/${entry.targetId}`}
+                            className="text-[13px] text-[var(--text)] hover:underline"
+                          >
+                            Account
                           </Link>
                         ) : (
                           <span className="text-[13px] text-[var(--text-subtle)]">—</span>
@@ -107,7 +116,7 @@ export function AuditPage() {
                       <EmptyState
                         icon={<ScrollText className="h-7 w-7" />}
                         title="Nothing recorded yet"
-                        description="Provisioning, suspensions and plan changes appear here."
+                        description="Provisioning, suspensions, plan changes and account actions appear here."
                       />
                     </td>
                   </tr>

@@ -8,6 +8,8 @@ import { LoginPage } from '@/pages/LoginPage';
 import { OverviewPage } from '@/pages/OverviewPage';
 import { OrganizationsPage } from '@/pages/OrganizationsPage';
 import { OrganizationDetailPage } from '@/pages/OrganizationDetailPage';
+import { AccountsPage } from '@/pages/AccountsPage';
+import { AccountDetailPage } from '@/pages/AccountDetailPage';
 import { PlansPage } from '@/pages/PlansPage';
 import { AuditPage } from '@/pages/AuditPage';
 import { SettingsPage } from '@/pages/SettingsPage';
@@ -43,6 +45,8 @@ export default function App() {
                 <Route path="overview" element={<OverviewPage />} />
                 <Route path="organizations" element={<OrganizationsPage />} />
                 <Route path="organizations/:id" element={<OrganizationDetailPage />} />
+                <Route path="accounts" element={<AccountsPage />} />
+                <Route path="accounts/:id" element={<AccountDetailPage />} />
                 <Route path="plans" element={<PlansPage />} />
                 <Route path="audit" element={<AuditPage />} />
                 <Route path="settings" element={<SettingsPage />} />

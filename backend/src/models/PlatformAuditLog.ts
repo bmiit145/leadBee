@@ -51,6 +51,8 @@ platformAuditLogSchema.index({ createdAt: -1 });
 platformAuditLogSchema.index({ organizationId: 1, createdAt: -1 });
 platformAuditLogSchema.index({ adminId: 1, createdAt: -1 });
 platformAuditLogSchema.index({ action: 1, createdAt: -1 });
+// "Everything done to this account" — the activity panel on its detail page.
+platformAuditLogSchema.index({ targetType: 1, targetId: 1, createdAt: -1 });
 
 platformAuditLogSchema.set('toJSON', { virtuals: true, transform: jsonTransform() });
 

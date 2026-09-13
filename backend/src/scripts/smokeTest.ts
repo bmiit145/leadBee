@@ -7,6 +7,7 @@ import { Lead } from '../models/Lead.js';
 import { Notification } from '../models/Notification.js';
 import { LeadDropReason } from '../models/LeadDropReason.js';
 import { PurposeOfInquiry } from '../models/PurposeOfInquiry.js';
+import { Account } from '../models/Account.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { LEAD_STAGE_ORDER } from '../config/constants.js';
 import { withoutTenantScope } from '../lib/tenantContext.js';
@@ -624,6 +625,308 @@ async function main(): Promise<void> {
     authorization: `Bearer ${platformLogin.json()?.data?.accessToken}`,
   };
 
+  // ─── ACCOUNT REGISTRATION ───────────────────────────────────────────────────
+  section('Account registration and the accounts console');
+
+  // Registration is rate-limited per IP. A random address per run keeps
+  // back-to-back smoke runs inside the limit without loosening it for real
+  // callers (`trustProxy` is on, so the API reads x-forwarded-for).
+  const octet = () => Math.floor(Math.random() * 254) + 1;
+  const registrationHeaders = { 'x-forwarded-for': `10.${octet()}.${octet()}.${octet()}` };
+
+  const accountEmail = `smoke-${Date.now()}@leadbee.test`;
+  const lockEmail = `smoke-lock-${Date.now()}@leadbee.test`;
+  const registration = {
+    firstName: 'Smoke',
+    lastName: 'Registrant',
+    email: accountEmail,
+    phone: `9${Date.now().toString().slice(-9)}`,
+    password: 'Password@123',
+    acceptedTerms: true,
+  };
+
+  const registerAccount = (payload: Record<string, unknown>) =>
+    app.inject({
+      method: 'POST',
+      url: '/api/v1/accounts/register',
+      headers: registrationHeaders,
+      payload,
+    });
+  const verifyAccount = (payload: Record<string, unknown>) =>
+    app.inject({
+      method: 'POST',
+      url: '/api/v1/accounts/verify-email',
+      headers: registrationHeaders,
+      payload,
+    });
+
+  const firstRegistration = await registerAccount(registration);
+  const firstReceipt = firstRegistration.json()?.data;
+  check(
+    'A person can register without an organization',
+    firstRegistration.statusCode === 202 &&
+      typeof firstReceipt?.registrationToken === 'string' &&
+      /^\d{6}$/.test(String(firstReceipt?.devCode)),
+    firstRegistration.json()
+  );
+
+  const withoutTerms = await registerAccount({ ...registration, acceptedTerms: false });
+  // 422: a schema refusal, the API's convention for invalid input. Service
+  // refusals (like a suspension without a reason, below) are 400.
+  check(
+    'Registration refuses a submission that did not accept the terms',
+    withoutTerms.statusCode === 422,
+    withoutTerms.statusCode
+  );
+
+  const secondRegistration = await registerAccount(registration);
+  const secondReceipt = secondRegistration.json()?.data;
+  check(
+    'Registering an unverified address again rotates the registration token',
+    secondRegistration.statusCode === 202 &&
+      typeof secondReceipt?.registrationToken === 'string' &&
+      secondReceipt.registrationToken !== firstReceipt?.registrationToken,
+    secondRegistration.statusCode
+  );
+
+  // The pre-registration hijack: a code must only confirm the attempt that holds
+  // the current token, never an earlier one.
+  const staleToken = await verifyAccount({
+    email: accountEmail,
+    code: firstReceipt?.devCode,
+    registrationToken: firstReceipt?.registrationToken,
+  });
+  check(
+    'A replaced registration token cannot confirm the email, even with the right code',
+    staleToken.statusCode === 400 &&
+      staleToken.json()?.error?.code === 'INVALID_VERIFICATION_CODE',
+    staleToken.json()
+  );
+
+  const wrongCode = firstReceipt?.devCode === '000000' ? '111111' : '000000';
+  const wrongGuess = await verifyAccount({
+    email: accountEmail,
+    code: wrongCode,
+    registrationToken: secondReceipt?.registrationToken,
+  });
+  check('A wrong verification code is refused', wrongGuess.statusCode === 400, wrongGuess.statusCode);
+
+  const confirmed = await verifyAccount({
+    email: accountEmail,
+    code: firstReceipt?.devCode,
+    registrationToken: secondReceipt?.registrationToken,
+  });
+  check('The emailed code confirms the address', confirmed.statusCode === 200, confirmed.json());
+
+  const repeatVerified = await registerAccount(registration);
+  const repeatReceipt = repeatVerified.json()?.data ?? {};
+  const receiptKeys = (receipt: Record<string, unknown>) =>
+    Object.keys(receipt)
+      .filter((key) => key !== 'devCode')
+      .sort()
+      .join(',');
+  check(
+    'Registering a verified address answers exactly like a new registration, with no code',
+    repeatVerified.statusCode === 202 &&
+      repeatReceipt.devCode === undefined &&
+      receiptKeys(repeatReceipt) === receiptKeys(firstReceipt ?? {}),
+    repeatReceipt
+  );
+
+  const lockRegistration = await registerAccount({ ...registration, email: lockEmail });
+  const lockReceipt = lockRegistration.json()?.data;
+  const lockWrong = lockReceipt?.devCode === '000000' ? '111111' : '000000';
+  for (let guess = 0; guess < 5; guess += 1) {
+    await verifyAccount({
+      email: lockEmail,
+      code: lockWrong,
+      registrationToken: lockReceipt?.registrationToken,
+    });
+  }
+  const afterLockout = await verifyAccount({
+    email: lockEmail,
+    code: lockReceipt?.devCode,
+    registrationToken: lockReceipt?.registrationToken,
+  });
+  check(
+    'Five wrong guesses retire the code, so the right code no longer works',
+    afterLockout.statusCode === 400,
+    afterLockout.statusCode
+  );
+
+  const resendUnknown = await app.inject({
+    method: 'POST',
+    url: '/api/v1/accounts/resend-verification',
+    headers: registrationHeaders,
+    payload: {
+      email: `nobody-${Date.now()}@leadbee.test`,
+      registrationToken: firstReceipt?.registrationToken,
+    },
+  });
+  check(
+    'Resend answers 202 for an address that was never registered',
+    resendUnknown.statusCode === 202,
+    resendUnknown.statusCode
+  );
+
+  const tenantOnAccounts = await app.inject({
+    method: 'GET',
+    url: '/api/v1/platform/accounts',
+    headers: ownerAuth,
+  });
+  check(
+    'A tenant token cannot reach the accounts console',
+    tenantOnAccounts.statusCode === 401 || tenantOnAccounts.statusCode === 403,
+    tenantOnAccounts.statusCode
+  );
+
+  const findAccount = async (email: string) => {
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/v1/platform/accounts?search=${encodeURIComponent(email)}`,
+      headers: platformAuth,
+    });
+    return response.json()?.data?.[0] as Record<string, unknown> | undefined;
+  };
+
+  const listedAccount = await findAccount(accountEmail);
+  check(
+    'The console lists the registered account as verified',
+    listedAccount?.email === accountEmail && Boolean(listedAccount?.emailVerifiedAt),
+    listedAccount
+  );
+  check(
+    'Account rows carry no password or verification hash',
+    Boolean(listedAccount) &&
+      !('password' in (listedAccount ?? {})) &&
+      !('verification' in (listedAccount ?? {})),
+    Object.keys(listedAccount ?? {})
+  );
+  const accountId = String(listedAccount?._id);
+
+  const lockedAccountId = String((await findAccount(lockEmail))?._id);
+  const lockedDetail = await app.inject({
+    method: 'GET',
+    url: `/api/v1/platform/accounts/${lockedAccountId}`,
+    headers: platformAuth,
+  });
+  const pendingCode = lockedDetail.json()?.data?.pendingVerification;
+  check(
+    'Detail reports guesses used on a pending code, and never its hash',
+    pendingCode?.attempts === 5 && !('codeHash' in (pendingCode ?? {})),
+    pendingCode
+  );
+
+  const accountStats = await app.inject({
+    method: 'GET',
+    url: '/api/v1/platform/accounts/stats',
+    headers: platformAuth,
+  });
+  check(
+    'Account stats count the new registrations',
+    accountStats.statusCode === 200 && (accountStats.json()?.data?.total ?? 0) >= 2,
+    accountStats.json()
+  );
+
+  const setAccountStatus = (payload: Record<string, unknown>) =>
+    app.inject({
+      method: 'PATCH',
+      url: `/api/v1/platform/accounts/${accountId}/status`,
+      headers: platformAuth,
+      payload,
+    });
+
+  const suspendWithoutReason = await setAccountStatus({ status: 'suspended' });
+  check(
+    'Suspending an account requires a reason',
+    suspendWithoutReason.statusCode === 400,
+    suspendWithoutReason.statusCode
+  );
+
+  const suspendedAccount = await setAccountStatus({
+    status: 'suspended',
+    reason: 'Smoke test suspension',
+  });
+  const suspendedData = suspendedAccount.json()?.data;
+  check(
+    'A platform admin can suspend an account, audited with the reason',
+    suspendedAccount.statusCode === 200 &&
+      suspendedData?.status === 'suspended' &&
+      suspendedData?.activity?.[0]?.action === 'account_suspended' &&
+      suspendedData?.activity?.[0]?.reason === 'Smoke test suspension',
+    suspendedData
+  );
+
+  const suspendAgain = await setAccountStatus({ status: 'suspended', reason: 'Again' });
+  check(
+    'Repeating a suspension writes no second audit entry',
+    suspendAgain.json()?.data?.activity?.length === suspendedData?.activity?.length,
+    suspendAgain.json()?.data?.activity?.length
+  );
+
+  const reactivatedAccount = await setAccountStatus({ status: 'active' });
+  check(
+    'A suspended account can be reactivated',
+    reactivatedAccount.json()?.data?.status === 'active',
+    reactivatedAccount.statusCode
+  );
+
+  const verifyVerified = await app.inject({
+    method: 'POST',
+    url: `/api/v1/platform/accounts/${accountId}/verify-email`,
+    headers: platformAuth,
+    payload: { reason: 'Smoke test' },
+  });
+  check(
+    'Manually verifying an already verified email is refused',
+    verifyVerified.statusCode === 409,
+    verifyVerified.statusCode
+  );
+
+  const manualVerify = await app.inject({
+    method: 'POST',
+    url: `/api/v1/platform/accounts/${lockedAccountId}/verify-email`,
+    headers: platformAuth,
+    payload: { reason: 'Smoke test manual verification' },
+  });
+  check(
+    'Support can verify an email manually, which retires the pending code',
+    manualVerify.statusCode === 200 &&
+      manualVerify.json()?.data?.emailVerifiedVia === 'platform_admin' &&
+      manualVerify.json()?.data?.pendingVerification === null,
+    manualVerify.json()
+  );
+
+  const deleteMismatch = await app.inject({
+    method: 'DELETE',
+    url: `/api/v1/platform/accounts/${accountId}`,
+    headers: platformAuth,
+    payload: { reason: 'Smoke cleanup', confirmEmail: 'someone-else@leadbee.test' },
+  });
+  check(
+    'Deletion refuses a confirmation that does not match the email',
+    deleteMismatch.statusCode === 400,
+    deleteMismatch.statusCode
+  );
+
+  for (const [id, email] of [
+    [accountId, accountEmail],
+    [lockedAccountId, lockEmail],
+  ] as const) {
+    await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/platform/accounts/${id}`,
+      headers: platformAuth,
+      payload: { reason: 'Smoke cleanup', confirmEmail: email },
+    });
+  }
+  const afterDelete = await app.inject({
+    method: 'GET',
+    url: `/api/v1/platform/accounts/${accountId}`,
+    headers: platformAuth,
+  });
+  check('A deleted account is gone', afterDelete.statusCode === 404, afterDelete.statusCode);
+
   const platformTokenOnTenant = await app.inject({
     method: 'GET',
     url: '/api/v1/leads',
@@ -724,6 +1027,9 @@ async function main(): Promise<void> {
     await Notification.deleteMany({ entityId: leadId });
     await LeadDropReason.deleteOne({ _id: dropReasonId });
     await PurposeOfInquiry.deleteOne({ _id: purposeId });
+    // Normally already erased through the console; this catches a run that
+    // failed part-way.
+    await Account.deleteMany({ email: { $in: [accountEmail, lockEmail] } });
   });
 
   await app.close();

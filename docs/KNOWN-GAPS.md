@@ -310,7 +310,56 @@ marked *ADR* add infrastructure or a policy decision.
 
 ---
 
-## 6. Local development notes
+## 6. Registration and accounts
+
+Added 2026-09-13 with [ADR-0003](./adr/0003-pre-tenant-accounts.md): a person
+registers in the app, confirms their email, and appears in the console under
+**Accounts**.
+
+### [ ] 6.1 No mail transport — P0 before registration ships
+
+- **What.** [lib/mailer.ts](../backend/src/lib/mailer.ts) logs "would have sent"
+  instead of delivering. Outside production the API returns the code as
+  `devCode`; in production registration answers 503 `EMAIL_UNAVAILABLE`.
+- **Fix.** Choose a provider, write its ADR (external dependency), put the
+  credentials in `env.ts`, and replace `mailer.send`. Nothing else changes.
+- **Done when.** A code arrives in a real inbox from a production-like
+  environment, and no response carries `devCode` there.
+
+### [ ] 6.2 A verified account can do nothing yet — P0 for the feature
+
+- **What.** There is no sign-in as an `Account` and no link to a tenant `User`,
+  so the "join a team or create your own" step does not exist. The success
+  screen says so rather than dead-ending.
+- **Fix.** Account sign-in that **enforces suspension**; then *create* (provision
+  an organization with the account as owner) and *join* (invite code, email
+  domain, or request-and-approve), each creating a tenant `User` linked by
+  `accountId`.
+- **Done when.** A newly registered person can reach a working organization,
+  and a suspended account cannot sign in.
+
+### [ ] 6.3 Registration limits are per instance — P1
+
+- **What.** The register, verify and resend limits use the in-memory rate-limit
+  store, so behind a load balancer each node grants its own quota.
+- **Fix.** Move `@fastify/rate-limit` to its Redis store before scaling out.
+
+### [ ] 6.4 Console search scans the collection — P2
+
+- **What.** Accounts search is a case-insensitive regex across four fields.
+  Fine at thousands of accounts; a collection scan at millions.
+- **Fix.** A text index, or a search service, when the count warrants it.
+
+### [ ] 6.5 No self-serve deletion or data export — P2 (DPDP / GDPR)
+
+- **What.** Only a platform owner can erase an account, and nobody can export
+  their own data.
+- **Fix.** An in-app "delete my account" request that lands in the console, and
+  a data export.
+
+---
+
+## 7. Local development notes
 
 Not code defects, but they cost time.
 

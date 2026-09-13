@@ -1,5 +1,10 @@
 import { api } from './api';
 import type {
+  Account,
+  AccountDetail,
+  AccountStats,
+  AccountStatus,
+  AccountVerificationFilter,
   AddOn,
   ApiList,
   ApiSingle,
@@ -17,6 +22,15 @@ import type {
   PlatformMetrics,
   TenantUser,
 } from '@/types';
+
+export interface AccountListParams {
+  page?: number;
+  limit?: number;
+  search?: string;
+  status?: AccountStatus;
+  verification?: AccountVerificationFilter;
+  sort?: 'newest' | 'oldest' | 'name';
+}
 
 export interface OrgListParams {
   page?: number;
@@ -180,6 +194,50 @@ export const platformService = {
     return data.data;
   },
 
+  // ─── Registered accounts ────────────────────────────────────────────────────
+  async listAccounts(params: AccountListParams) {
+    const { data } = await api.get<ApiList<Account>>('/accounts', { params });
+    return data;
+  },
+
+  async accountStats() {
+    const { data } = await api.get<ApiSingle<AccountStats>>('/accounts/stats');
+    return data.data;
+  },
+
+  async getAccount(id: string) {
+    const { data } = await api.get<ApiSingle<AccountDetail>>(`/accounts/${id}`);
+    return data.data;
+  },
+
+  async setAccountStatus(id: string, status: AccountStatus, reason?: string) {
+    const { data } = await api.patch<ApiSingle<AccountDetail>>(`/accounts/${id}/status`, {
+      status,
+      ...(reason ? { reason } : {}),
+    });
+    return data.data;
+  },
+
+  async verifyAccountEmail(id: string, reason: string) {
+    const { data } = await api.post<ApiSingle<AccountDetail>>(
+      `/accounts/${id}/verify-email`,
+      { reason }
+    );
+    return data.data;
+  },
+
+  async setAccountNotes(id: string, internalNotes: string) {
+    const { data } = await api.patch<ApiSingle<AccountDetail>>(`/accounts/${id}/notes`, {
+      internalNotes,
+    });
+    return data.data;
+  },
+
+  /** `confirmEmail` is what the operator typed — the server re-checks it. */
+  async deleteAccount(id: string, reason: string, confirmEmail: string) {
+    await api.delete(`/accounts/${id}`, { data: { reason, confirmEmail } });
+  },
+
   // ─── Audit ──────────────────────────────────────────────────────────────────
   async auditLog(params: { organizationId?: string; page?: number; limit?: number } = {}) {
     const { data } = await api.get<ApiList<AuditEntry>>('/audit', { params });
@@ -263,6 +321,11 @@ export const queryKeys = {
   organization: (id: string) => ['platform', 'organization', id] as const,
   organizationUsers: (id: string, page: number) =>
     ['platform', 'organization', id, 'users', page] as const,
+  // List and stats share the `['platform', 'accounts']` prefix, so one
+  // invalidation after an account action refreshes both.
+  accounts: (params: AccountListParams) => ['platform', 'accounts', 'list', params] as const,
+  accountStats: ['platform', 'accounts', 'stats'] as const,
+  account: (id: string) => ['platform', 'account', id] as const,
   audit: (params: Record<string, unknown>) => ['platform', 'audit', params] as const,
   catalog: ['platform', 'catalog'] as const,
   plans: (allVersions = false) => ['platform', 'plans', allVersions] as const,

@@ -17,12 +17,15 @@ export type PlatformRole = 'owner' | 'operator' | 'support';
  *  common case is answering a ticket, not changing a customer's plan. */
 export const PLATFORM_ROLE_PERMISSIONS: Record<PlatformRole, string[]> = {
   owner: ['*'],
+  // `accounts.delete` is owner-only on purpose: erasing a person cannot be
+  // undone, so it sits with the role that is accountable for the platform.
   operator: [
     'orgs.view', 'orgs.create', 'orgs.update', 'orgs.suspend', 'orgs.plan',
     'users.view', 'users.update', 'users.deactivate',
+    'accounts.view', 'accounts.manage',
     'metrics.view', 'audit.view',
   ],
-  support: ['orgs.view', 'users.view', 'metrics.view', 'audit.view'],
+  support: ['orgs.view', 'users.view', 'accounts.view', 'metrics.view', 'audit.view'],
 };
 
 export interface IPlatformAdmin extends Document {

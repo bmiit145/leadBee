@@ -63,8 +63,9 @@ Every compound index on a tenant-owned collection starts with
 than a migration. Losing this property silently forecloses the scaling path.
 
 **Exempt.** `Organization` (it *is* the tenant), `PlatformAdmin`,
-`PlatformAuditLog`, and TTL indexes, which must be declared on the date field
-alone.
+`PlatformAuditLog`, `Account` (a person before any tenant —
+[ADR-0003](../adr/0003-pre-tenant-accounts.md)), and TTL indexes, which must be
+declared on the date field alone.
 
 ### ARCH-6 — The tenant key is not echoed to clients · MUST · Target
 

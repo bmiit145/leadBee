@@ -19,6 +19,9 @@ export { PlatformAdmin, PLATFORM_ROLE_PERMISSIONS, type IPlatformAdmin, type Pla
 export { PlatformAuditLog, type IPlatformAuditLog } from './PlatformAuditLog.js';
 export { Counter, type ICounter } from './Counter.js';
 
+// A person before any organization — see docs/adr/0003-pre-tenant-accounts.md.
+export { Account, ACCOUNT_STATUSES, type IAccount, type AccountStatus } from './Account.js';
+
 // Tenant realm — every one carries organizationId via tenantPlugin.
 export { User, type IUser } from './User.js';
 export { Role, type IRole } from './Role.js';
