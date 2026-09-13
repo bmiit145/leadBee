@@ -199,6 +199,15 @@ export default function LoginScreen() {
           </View>
         </View>
 
+        <TouchableOpacity
+          style={styles.registerRow}
+          onPress={() => router.push('/(auth)/register')}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.registerText}>{t('login.noAccount')}</Text>
+          <Text style={styles.registerLink}>{t('login.createAccount')}</Text>
+        </TouchableOpacity>
+
         <Text style={styles.footer}>Lead management, without the noise.</Text>
       </ScrollView>
 
@@ -344,11 +353,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textSecondary,
   },
+  registerRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: spacing.xl,
+  },
+  registerText: { fontSize: 14, color: colors.textSecondary },
+  registerLink: { fontSize: 14, fontWeight: '700', color: colors.text, marginLeft: 5 },
   footer: {
     color: colors.textTertiary,
     fontSize: 12,
     textAlign: 'center',
-    marginTop: spacing.xl,
+    marginTop: spacing.lg,
   },
   modalBackdrop: {
     flex: 1,

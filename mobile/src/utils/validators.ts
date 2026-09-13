@@ -71,6 +71,33 @@ export const loginSchema = z.object({
 
 export type LoginFormData = z.infer<typeof loginSchema>;
 
+/**
+ * Registering a person.
+ *
+ * Deliberately asks nothing about a company: in LeadBee the account exists
+ * first and the organization — joined or created — comes after. The reference
+ * app asks for Company Name and GST on this same form, which is what makes its
+ * signup an organization signup.
+ */
+export const registerSchema = z
+  .object({
+    firstName: z.string().trim().min(2, 'First name is required').max(40),
+    lastName: z.string().trim().min(1, 'Last name is required').max(40),
+    email: z.string().trim().email('A valid email is required'),
+    phone: newAccountPhone,
+    password: z.string().min(8, 'Password must be at least 8 characters'),
+    confirmPassword: z.string(),
+    acceptedTerms: z.literal(true, {
+      errorMap: () => ({ message: 'Please accept the terms to continue' }),
+    }),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: 'Both passwords must match',
+    path: ['confirmPassword'],
+  });
+
+export type RegisterFormData = z.infer<typeof registerSchema>;
+
 /** Self-serve signup, for the "create an organization" flow. */
 export const signupSchema = z.object({
   organizationName: z.string().trim().min(2, 'Organization name is required'),
