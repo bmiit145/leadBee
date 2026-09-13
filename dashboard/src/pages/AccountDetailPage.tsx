@@ -30,6 +30,7 @@ import {
   Tr,
 } from '@/components/ui/primitives';
 import { AccountStatusChip, VerificationChip } from '@/components/accounts/AccountChips';
+import { ActiveDot, StatusChip } from '@/components/ui/StatusChip';
 import { AccountActionDialog } from '@/components/accounts/AccountActionDialog';
 import type { AccountDetail, AccountStatus } from '@/types';
 
@@ -177,7 +178,17 @@ export function AccountDetailPage() {
                 </Button>
               ))}
             {can('accounts.delete') && (
-              <Button variant="ghost" onClick={() => setAction('delete')}>
+              <Button
+                variant="ghost"
+                onClick={() => setAction('delete')}
+                // The API refuses too; disabling says why before anyone types a reason.
+                disabled={account.memberships.length > 0}
+                title={
+                  account.memberships.length > 0
+                    ? 'Remove this person from their organizations before deleting the account'
+                    : undefined
+                }
+              >
                 <Trash2 className="h-4 w-4" aria-hidden />
                 Delete
               </Button>
@@ -238,6 +249,27 @@ export function AccountDetailPage() {
                   <span className="block text-[12px] text-[var(--text-muted)]">
                     {formatRelative(account.createdAt)}
                   </span>
+                </span>
+              </Fact>
+
+              <Fact label="Last sign-in">
+                <span className="text-[13px] text-[var(--text)]">
+                  {account.lastLoginAt ? formatDateTime(account.lastLoginAt) : 'Never'}
+                  {account.lastLoginAt && (
+                    <span className="block text-[12px] text-[var(--text-muted)]">
+                      {formatRelative(account.lastLoginAt)}
+                    </span>
+                  )}
+                </span>
+              </Fact>
+
+              <Fact label="Created by">
+                <span className="text-[13px] text-[var(--text)]">
+                  {account.source === 'registration'
+                    ? 'Self-registration'
+                    : account.source === 'organization'
+                      ? 'An organization added them'
+                      : 'Migrated from an existing member'}
                 </span>
               </Fact>
 
@@ -304,12 +336,69 @@ export function AccountDetailPage() {
       </div>
 
       <Card>
-        <CardHeader title="Organizations" />
-        <EmptyState
-          icon={<Building2 className="h-7 w-7" />}
-          title="Not a member of any organization"
-          description="Joining an existing organization or creating one is the next step after registration. That flow is not built yet, so every account is unplaced for now."
+        <CardHeader
+          title="Organizations"
+          description="One sign-in for all of them. Role and active state are per organization."
         />
+        {!account ? (
+          <div className="space-y-2 p-5">
+            <Skeleton className="h-4" />
+            <Skeleton className="h-4" />
+          </div>
+        ) : account.memberships.length === 0 ? (
+          <EmptyState
+            icon={<Building2 className="h-7 w-7" />}
+            title="Not a member of any organization"
+            description="Joining an existing organization or creating one comes after registration. That step is not built yet, so this person cannot sign in to any workspace."
+          />
+        ) : (
+          <TableWrap>
+            <Table>
+              <thead>
+                <tr>
+                  <Th>Organization</Th>
+                  <Th>Role</Th>
+                  <Th>In this organization</Th>
+                  <Th>Last sign-in</Th>
+                  <Th>Joined</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {account.memberships.map((membership) => (
+                  <Tr key={membership._id}>
+                    <Td>
+                      {membership.organization ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Link
+                            to={`/organizations/${membership.organization._id}`}
+                            className="font-medium text-[var(--text)] hover:underline"
+                          >
+                            {membership.organization.name}
+                          </Link>
+                          <StatusChip status={membership.organization.status} />
+                        </div>
+                      ) : (
+                        <span className="text-[13px] text-[var(--text-subtle)]">
+                          Organization no longer exists
+                        </span>
+                      )}
+                    </Td>
+                    <Td className="text-[13px] capitalize text-[var(--text)]">{membership.role}</Td>
+                    <Td>
+                      <ActiveDot active={membership.isActive} />
+                    </Td>
+                    <Td className="text-[13px] text-[var(--text-muted)]">
+                      {formatRelative(membership.lastLoginAt)}
+                    </Td>
+                    <Td className="text-[13px] text-[var(--text-muted)]">
+                      {formatDateTime(membership.joinedAt)}
+                    </Td>
+                  </Tr>
+                ))}
+              </tbody>
+            </Table>
+          </TableWrap>
+        )}
       </Card>
 
       <Card>
@@ -366,7 +455,7 @@ export function AccountDetailPage() {
             open={action === 'suspend'}
             tone="danger"
             title="Suspend this account?"
-            description="They will not be able to finish registering, and any outstanding verification code stops working. Nothing is deleted, and you can reactivate at any time."
+            description="They are signed out of every organization they belong to and cannot sign in, and any outstanding verification code stops working. Nothing is deleted, and you can reactivate at any time."
             confirmLabel="Suspend"
             reasonRequired
             reasonPlaceholder="Registered with a disposable address…"

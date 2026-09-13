@@ -54,7 +54,12 @@ export default function EditProfileScreen() {
       Alert.alert(t('common.error'), t('editProfile.nameRequired'));
       return;
     }
-    if (changes.email && !EMAIL_PATTERN.test(changes.email)) {
+    // Required now: the email is one of the two ways this person signs in.
+    if (!changes.email) {
+      Alert.alert(t('common.error'), t('editProfile.emailRequired'));
+      return;
+    }
+    if (!EMAIL_PATTERN.test(changes.email)) {
       Alert.alert(t('common.error'), t('editProfile.invalidEmail'));
       return;
     }
@@ -113,7 +118,7 @@ export default function EditProfileScreen() {
             left={<TextInput.Icon icon="account-outline" color={colors.textSecondary} />}
           />
 
-          <FieldLabel>{t('editProfile.email')}</FieldLabel>
+          <FieldLabel required>{t('editProfile.email')}</FieldLabel>
           <TextInput
             {...inputProps}
             value={email}

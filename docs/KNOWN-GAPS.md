@@ -326,17 +326,17 @@ registers in the app, confirms their email, and appears in the console under
 - **Done when.** A code arrives in a real inbox from a production-like
   environment, and no response carries `devCode` there.
 
-### [ ] 6.2 A verified account can do nothing yet — P0 for the feature
+### [ ] 6.2 A registered person cannot join or create an organization yet — P0 for the feature
 
-- **What.** There is no sign-in as an `Account` and no link to a tenant `User`,
-  so the "join a team or create your own" step does not exist. The success
-  screen says so rather than dead-ending.
-- **Fix.** Account sign-in that **enforces suspension**; then *create* (provision
-  an organization with the account as owner) and *join* (invite code, email
-  domain, or request-and-approve), each creating a tenant `User` linked by
-  `accountId`.
-- **Done when.** A newly registered person can reach a working organization,
-  and a suspended account cannot sign in.
+- **What.** Sign-in is now by account ([ADR-0004](./adr/0004-account-is-the-identity.md))
+  and enforces suspension, but a person with no membership gets 403
+  `NO_ORGANIZATION`. The "join a team or create your own" step does not exist.
+- **Fix.** *Create* (provision an organization with the signed-in account as
+  owner — `organizationService.provision` already links an existing account)
+  and *join* (invite code, email domain, or request-and-approve), each creating
+  a membership through `memberService.addMember`. Sign-in needs an
+  account-level session to reach those screens without a tenant token.
+- **Done when.** A newly registered person can reach a working organization.
 
 ### [ ] 6.3 Registration limits are per instance — P1
 
@@ -356,6 +356,31 @@ registers in the app, confirms their email, and appears in the console under
   their own data.
 - **Fix.** An in-app "delete my account" request that lands in the console, and
   a data export.
+
+---
+
+### [ ] 6.6 Removing someone from an organization is not built — P1
+
+- **What.** A membership can be deactivated but not removed. Because an account
+  with memberships cannot be deleted from the console (ADR-0004), erasing a
+  person who was ever a member is blocked.
+- **Fix.** A "remove from organization" action that deletes the membership,
+  reassigns or keeps their leads by policy, frees the seat and audits it.
+
+### [ ] 6.7 Admin-typed emails are unverified — P2
+
+- **What.** Accounts created by the backfill, by team add and by provisioning
+  carry emails someone else typed. They are marked unverified and nothing
+  prompts the person to confirm.
+- **Fix.** Once mail is delivered (6.1), ask for confirmation at first sign-in,
+  and decide whether an unconfirmed email may be used to sign in.
+
+### [ ] 6.8 Taken identifiers are visible to anyone registering — P2 (accepted)
+
+- **What.** Registration and team add answer `EMAIL_IN_USE` / `PHONE_IN_USE`.
+  This was a product decision in ADR-0004.
+- **Watch.** Rate limits are the only bound (and are per instance, 6.3). If
+  scraping shows up, add a CAPTCHA or proof of work to registration.
 
 ---
 

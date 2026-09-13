@@ -333,7 +333,7 @@ export function OrganizationDetailPage() {
                 <tbody>
                   {usersQuery.data.data.map((user) => (
                     <Tr key={user._id}>
-                      <Td><span className="font-medium text-[var(--text)]">{user.name}</span>{user.email && <span className="block text-[12px] text-[var(--text-muted)]">{user.email}</span>}</Td>
+                      <Td>{user.accountId && can('accounts.view') ? <Link to={`/accounts/${user.accountId}`} className="font-medium text-[var(--text)] hover:underline">{user.name}</Link> : <span className="font-medium text-[var(--text)]">{user.name}</span>}{user.email && <span className="block text-[12px] text-[var(--text-muted)]">{user.email}</span>}</Td>
                       <Td className="text-[13px] capitalize text-[var(--text)]">{user.role}</Td>
                       <Td className="tabular text-[13px] text-[var(--text-muted)]">{user.phone}</Td>
                       <Td><ActiveDot active={user.isActive} /></Td>

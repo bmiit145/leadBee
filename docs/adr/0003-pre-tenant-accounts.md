@@ -1,7 +1,10 @@
 # ADR-0003: A person registers before they belong to an organization
 
 ## Status
-Proposed
+Proposed — partly superseded by [ADR-0004](./0004-account-is-the-identity.md):
+every tenant user is now a membership of an account, registration refuses an
+email or mobile already tied to another person (points 3 and the mobile-uniqueness
+alternative below no longer hold), and sign-in is by account.
 
 ## Context
 

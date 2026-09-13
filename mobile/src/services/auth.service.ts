@@ -15,7 +15,7 @@ export interface MeResponse {
   isOrganizer: boolean;
 }
 
-/** One of the organizations a phone number belongs to, offered for selection. */
+/** One of the organizations an account belongs to, offered for selection. */
 export interface OrgChoice {
   _id: string;
   name: string;
@@ -23,7 +23,7 @@ export interface OrgChoice {
 }
 
 /**
- * Thrown when a phone number belongs to more than one organization and the
+ * Thrown when the account belongs to more than one organization and the
  * caller has not said which. The login screen catches this and shows a picker.
  *
  * Not an error condition in the usual sense — it is the API asking a question,
@@ -33,7 +33,7 @@ export class OrganizationSelectionRequired extends Error {
   readonly organizations: OrgChoice[];
 
   constructor(organizations: OrgChoice[]) {
-    super('This phone number belongs to more than one organization.');
+    super('This account belongs to more than one organization.');
     this.name = 'OrganizationSelectionRequired';
     this.organizations = organizations;
   }
@@ -41,20 +41,22 @@ export class OrganizationSelectionRequired extends Error {
 
 export const authService = {
   /**
-   * Sign in with phone and password.
+   * Sign in with an email or mobile number and the account's password.
    *
-   * `organizationId` is only needed when the same phone exists in several
-   * tenants — the overwhelming minority — so the login screen does not ask for
-   * it up front and only shows a picker if the API says it must.
+   * `organizationId` is only needed when the account belongs to several
+   * organizations — the minority — so the login screen does not ask for it up
+   * front and only shows a picker if the API says it must. A suspended account
+   * (403 `ACCOUNT_SUSPENDED`) or one with no organization (403
+   * `NO_ORGANIZATION`) surfaces as the API's message.
    */
   async login(
-    phone: string,
+    identifier: string,
     password: string,
     organizationId?: string
   ): Promise<LoginResponse> {
     try {
       const { data } = await api.post<ApiResponse<LoginResponse>>('/auth/login', {
-        phone,
+        identifier,
         password,
         ...(organizationId ? { organizationId } : {}),
       });

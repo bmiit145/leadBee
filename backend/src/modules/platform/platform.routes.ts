@@ -222,7 +222,9 @@ export async function platformRoutes(app: FastifyInstance): Promise<void> {
           ownerName: z.string().trim().min(2).max(80),
           ownerPhone: mobilePhoneSchema,
           ownerEmail: z.string().email(),
-          ownerPassword: z.string().min(8),
+          // Used only when the owner is new to LeadBee. An existing person is
+          // linked and keeps the password they already sign in with.
+          ownerPassword: z.string().min(8).max(128).optional(),
           plan: planKeySchema.optional(),
           status: statusEnum.optional(),
         }),
@@ -232,7 +234,7 @@ export async function platformRoutes(app: FastifyInstance): Promise<void> {
         const admin = request.platformAuth!.admin;
         const body = request.body;
 
-        const { organization, owner } = await organizationService.provision({
+        const { organization, owner, ownerAccountCreated } = await organizationService.provision({
           organizationName: body.organizationName,
           slug: body.slug,
           ownerName: body.ownerName,
@@ -256,7 +258,13 @@ export async function platformRoutes(app: FastifyInstance): Promise<void> {
 
         return reply
           .status(201)
-          .send(ok({ organization: organization.toJSON(), owner: owner.toJSON() }));
+          .send(
+            ok({
+              organization: organization.toJSON(),
+              owner: owner.toJSON(),
+              ownerAccountCreated,
+            })
+          );
       },
     });
 

@@ -14,6 +14,7 @@
     "seed": "tsx src/scripts/seed.ts",
     "seed:catalog": "tsx src/scripts/seedCatalog.ts",
     "sync-indexes": "tsx src/scripts/syncIndexes.ts",
+    "migrate:accounts": "tsx src/scripts/migrateAccounts.ts",
     "init-rs": "tsx src/scripts/initReplicaSet.ts",
     "routes": "tsx src/scripts/routeTree.ts",
     "smoke": "tsx src/scripts/smokeTest.ts"

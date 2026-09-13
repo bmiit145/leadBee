@@ -37,7 +37,8 @@ import { colors, spacing, borderRadius, shadows } from '../../src/theme';
 type StatusTab = 'active' | 'inactive';
 
 const PAGE_SIZE = 50;
-const MIN_PASSWORD = 6;
+/** Mirrors the API: this password signs the member in to every organization they belong to. */
+const MIN_PASSWORD = 8;
 
 /**
  * Team Members — the organizer's User Management.

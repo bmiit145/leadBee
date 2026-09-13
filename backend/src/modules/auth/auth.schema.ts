@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { loginPhoneSchema } from '../../lib/phone.js';
 import { isExpoPushToken } from '../../lib/expoPush.js';
 
 export const objectId = z
@@ -7,10 +6,20 @@ export const objectId = z
   .regex(/^[a-f\d]{24}$/i, 'Invalid id');
 
 export const loginBody = z.object({
-  phone: loginPhoneSchema,
+  /**
+   * Email or mobile number — one field, told apart by an `@`. Normalised in the
+   * service, which is where the same rule serves every caller.
+   */
+  identifier: z.string().trim().min(1).max(254).optional(),
+  /**
+   * Accepted from app builds released before sign-in by email, which send the
+   * mobile number under this name. A native build in someone's pocket cannot be
+   * updated by redeploying the API, so the old field keeps working.
+   */
+  phone: z.string().trim().min(1).max(32).optional(),
   password: z.string().min(1, 'Password is required'),
   /**
-   * Only needed when the same phone belongs to more than one organization. The
+   * Only needed when the account belongs to more than one organization. The
    * login screen omits it; the API asks for it with a 409 and the client
    * re-submits with the chosen org.
    */
@@ -23,7 +32,7 @@ export const refreshBody = z.object({
 
 export const changePasswordBody = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(6, 'Password must be at least 6 characters'),
+  newPassword: z.string().min(8, 'Password must be at least 8 characters').max(128),
 });
 
 export const pushTokenBody = z.object({
@@ -33,8 +42,10 @@ export const pushTokenBody = z.object({
 });
 
 export const updateMeBody = z.object({
-  name: z.string().trim().min(1).optional(),
-  email: z.string().email().optional().or(z.literal('')),
+  name: z.string().trim().min(1).max(80).optional(),
+  // `''` is accepted by the schema and refused by the handler with a reason: an
+  // account cannot exist without the email its owner signs in with.
+  email: z.string().trim().toLowerCase().email().max(254).optional().or(z.literal('')),
   avatarUrl: z.string().trim().optional(),
   designation: z.string().trim().optional(),
   locale: z.string().trim().min(2).max(8).optional(),

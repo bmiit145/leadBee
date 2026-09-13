@@ -1,6 +1,7 @@
-import mongoose, { Types } from 'mongoose';
+import mongoose, { Types, type ClientSession } from 'mongoose';
 import { Organization, type IOrganization } from '../../models/Organization.js';
 import { User, type IUser } from '../../models/User.js';
+import { Account } from '../../models/Account.js';
 import { Role } from '../../models/Role.js';
 import { PurposeOfInquiry } from '../../models/PurposeOfInquiry.js';
 import { LeadDropReason } from '../../models/LeadDropReason.js';
@@ -21,14 +22,27 @@ import {
 } from '../../entitlements/subscription.service.js';
 import { assertWithinLimit, UNLIMITED } from '../../entitlements/index.js';
 import type { FeatureGrant } from '../../entitlements/types.js';
+import {
+  identityConflict,
+  identityService,
+  membershipCopy,
+} from '../accounts/identity.service.js';
 
 export interface ProvisionInput {
   organizationName: string;
   slug?: string;
   ownerName: string;
   ownerPhone: string;
-  ownerEmail?: string;
-  ownerPassword: string;
+  /** Required: the owner signs in with it, and it is half of who they are. */
+  ownerEmail: string;
+  /** Needed only when the owner is new to LeadBee. */
+  ownerPassword?: string;
+  /**
+   * Self-serve signup sets this: when the email and mobile already have an
+   * account, whoever filled in the form must know its password before an
+   * organization is created in that person's name.
+   */
+  requireOwnerPassword?: boolean;
   /** Catalogue plan key. Validated against the catalogue, not a compiled list. */
   plan?: string;
   source: 'self_serve' | 'platform_provisioned';
@@ -40,6 +54,8 @@ export interface ProvisionInput {
 export interface ProvisionResult {
   organization: IOrganization;
   owner: IUser;
+  /** False when the owner already had an account and it was linked. */
+  ownerAccountCreated: boolean;
 }
 
 /** Default meeting purposes, so a new tenant's dropdown is not empty on day one. */
@@ -63,7 +79,8 @@ const STARTER_DROP_REASONS = [
 export const organizationService = {
   /**
    * Create a tenant and everything it needs to be usable: its role set, its
-   * first user, and a few starter lookups.
+   * owner's membership (linked to the owner's account, created if needed), and a
+   * few starter lookups.
    *
    * Shared by both onboarding paths — self-serve signup and platform
    * provisioning — so the two cannot drift into producing differently-shaped
@@ -79,6 +96,18 @@ export const organizationService = {
   async provision(input: ProvisionInput): Promise<ProvisionResult> {
     const slug = normalizeSlug(input.slug ?? input.organizationName);
     await assertSlugAvailable(slug);
+
+    // Checked before anything is written, so a taken email or mobile is a clean
+    // 409 rather than a provisioning that rolls back. The check repeats inside
+    // the write, which is the authoritative one.
+    const { resolution } = await identityService.lookupIdentity(
+      input.ownerEmail,
+      input.ownerPhone.trim()
+    );
+    if (resolution.kind === 'conflict') throw identityConflict(resolution.reason);
+    if (resolution.kind === 'new' && !input.ownerPassword) {
+      throw AppError.badRequest('A password is required to create the owner’s account.');
+    }
 
     if (await supportsTransactions()) {
       return provisionTransactionally(input, slug);
@@ -232,6 +261,18 @@ async function organizationFields(input: ProvisionInput, slug: string) {
   };
 }
 
+function ownerAccount(input: ProvisionInput, session?: ClientSession) {
+  return identityService.ensureAccountForMembership(
+    {
+      name: input.ownerName.trim(),
+      email: input.ownerEmail,
+      phone: input.ownerPhone.trim(),
+      password: input.ownerPassword,
+    },
+    { session, requirePasswordOfExisting: input.requireOwnerPassword }
+  );
+}
+
 /**
  * Does this deployment support multi-document transactions?
  *
@@ -271,6 +312,10 @@ async function provisionTransactionally(
     await session.withTransaction(async () => {
       const [organization] = await Organization.create([fields], { session });
 
+      // The account is created (or linked) in the same transaction, so a
+      // failure below cannot leave a person with no organization behind.
+      const owner = await ownerAccount(input, session);
+
       result = await runInTenantScope(
         {
           organizationId: organization!._id,
@@ -291,14 +336,12 @@ async function provisionTransactionally(
           );
           const ownerRole = roles.find((r) => r.name === ROLES.OWNER)!;
 
-          const [owner] = await User.create(
+          const [membership] = await User.create(
             [
               {
                 organizationId: organization!._id,
-                name: input.ownerName.trim(),
-                phone: input.ownerPhone.trim(),
-                email: input.ownerEmail,
-                password: input.ownerPassword,
+                accountId: owner.account._id,
+                ...membershipCopy(owner.account),
                 role: ROLES.OWNER,
                 roleId: ownerRole._id,
                 permissions: [],
@@ -312,7 +355,7 @@ async function provisionTransactionally(
             STARTER_PURPOSES.map((name, index) => ({
               organizationId: organization!._id,
               name,
-              createdBy: owner!._id,
+              createdBy: membership!._id,
               sortOrder: index,
             })),
             { session }
@@ -322,13 +365,17 @@ async function provisionTransactionally(
             STARTER_DROP_REASONS.map((name, index) => ({
               organizationId: organization!._id,
               name,
-              createdBy: owner!._id,
+              createdBy: membership!._id,
               sortOrder: index,
             })),
             { session }
           );
 
-          return { organization: organization!, owner: owner! };
+          return {
+            organization: organization!,
+            owner: membership!,
+            ownerAccountCreated: owner.created,
+          };
         }
       );
     });
@@ -345,8 +392,12 @@ async function provisionWithCompensation(
   slug: string
 ): Promise<ProvisionResult> {
   const organization = await Organization.create(await organizationFields(input, slug));
+  let createdAccountId: Types.ObjectId | undefined;
 
   try {
+    const owner = await ownerAccount(input);
+    if (owner.created) createdAccountId = owner.account._id;
+
     return await runInTenantScope(
       {
         organizationId: organization._id,
@@ -366,12 +417,10 @@ async function provisionWithCompensation(
         );
         const ownerRole = roles.find((r) => r.name === ROLES.OWNER)!;
 
-        const owner = await User.create({
+        const membership = await User.create({
           organizationId: organization._id,
-          name: input.ownerName.trim(),
-          phone: input.ownerPhone.trim(),
-          email: input.ownerEmail,
-          password: input.ownerPassword,
+          accountId: owner.account._id,
+          ...membershipCopy(owner.account),
           role: ROLES.OWNER,
           roleId: ownerRole._id,
           permissions: [],
@@ -382,7 +431,7 @@ async function provisionWithCompensation(
           STARTER_PURPOSES.map((name, index) => ({
             organizationId: organization._id,
             name,
-            createdBy: owner._id,
+            createdBy: membership._id,
             sortOrder: index,
           }))
         );
@@ -391,17 +440,17 @@ async function provisionWithCompensation(
           STARTER_DROP_REASONS.map((name, index) => ({
             organizationId: organization._id,
             name,
-            createdBy: owner._id,
+            createdBy: membership._id,
             sortOrder: index,
           }))
         );
 
-        return { organization, owner };
+        return { organization, owner: membership, ownerAccountCreated: owner.created };
       }
     );
   } catch (error) {
     logger.error({ err: error, slug }, 'provisioning failed — compensating');
-    await rollback(organization._id);
+    await rollback(organization._id, createdAccountId);
     throw error;
   }
 }
@@ -435,7 +484,10 @@ async function assertSlugAvailable(slug: string): Promise<void> {
   }
 }
 
-async function rollback(organizationId: Types.ObjectId): Promise<void> {
+async function rollback(
+  organizationId: Types.ObjectId,
+  createdAccountId?: Types.ObjectId
+): Promise<void> {
   try {
     await runInTenantScope(
       {
@@ -454,6 +506,8 @@ async function rollback(organizationId: Types.ObjectId): Promise<void> {
       }
     );
     await Organization.deleteOne({ _id: organizationId });
+    // Only an account this provisioning created; a linked existing person keeps theirs.
+    if (createdAccountId) await Account.deleteOne({ _id: createdAccountId });
   } catch (cleanupError) {
     // Surfacing this matters more than rethrowing: the original failure is what
     // the caller needs, but an orphaned tenant needs someone to go look.

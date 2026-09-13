@@ -13,12 +13,18 @@ export interface TeamMember {
   isActive: boolean;
   lastLoginAt?: string;
   createdAt?: string;
+  /**
+   * On a create response only: the email and mobile already belonged to someone
+   * on LeadBee, so their account was added and the typed password was not used.
+   */
+  linkedExistingAccount?: boolean;
 }
 
 export interface NewTeamMember {
   name: string;
   phone: string;
-  email?: string;
+  /** Required: members sign in with their email or mobile number. */
+  email: string;
   password: string;
   role: UserRole;
   designation?: string;

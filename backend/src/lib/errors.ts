@@ -46,6 +46,15 @@ export class AppError extends Error {
     return new AppError(message, 429, 'RATE_LIMITED');
   }
 
+  /**
+   * The person's account is suspended by the platform. Distinct from an
+   * organization being inactive: this follows the person into every
+   * organization they belong to.
+   */
+  static accountSuspended(message = 'This account has been suspended. Contact support.'): AppError {
+    return new AppError(message, 403, 'ACCOUNT_SUSPENDED');
+  }
+
   static internal(message = 'Internal server error'): AppError {
     return new AppError(message, 500, 'INTERNAL_ERROR');
   }

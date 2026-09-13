@@ -9,6 +9,8 @@ export interface TenantAuth {
   user: IUser;
   organization: IOrganization;
   userId: Types.ObjectId;
+  /** The person behind this membership — see models/Account.ts. */
+  accountId: Types.ObjectId;
   organizationId: Types.ObjectId;
   role: string;
   /** Role permissions ∪ per-user grants, already merged. */

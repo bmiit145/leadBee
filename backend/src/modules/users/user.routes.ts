@@ -7,6 +7,8 @@ import { Role } from '../../models/Role.js';
 import { Organization } from '../../models/Organization.js';
 import { organizationService } from '../organizations/organization.service.js';
 import { userPolicy, type UserManager } from './user.service.js';
+import { memberService } from './member.service.js';
+import { identityService } from '../accounts/identity.service.js';
 import { auditService } from '../audit/audit.service.js';
 import { changedFields } from '../../lib/changedFields.js';
 import { viewerOf } from '../../lib/viewer.js';
@@ -24,16 +26,27 @@ import {
   paginationQuery,
 } from '../../lib/schemas.js';
 import { message, ok, paginated } from '../../lib/response.js';
-import { AUDIT_ACTIONS, PERMISSIONS, ROLES, ROLE_ORDER } from '../../config/constants.js';
+import {
+  AUDIT_ACTIONS,
+  PERMISSIONS,
+  ROLES,
+  ROLE_ORDER,
+  type Role as RoleName,
+} from '../../config/constants.js';
 import { requireOrganizationId } from '../../lib/tenantContext.js';
 
 const security = [{ tenantToken: [] }];
 
+const emailSchema = z.string().trim().toLowerCase().email('A valid email is required').max(254);
+const passwordSchema = z.string().min(8, 'Password must be at least 8 characters').max(128);
+
 const createUserBody = z.object({
   name: z.string().trim().min(2).max(80),
   phone: mobilePhoneSchema,
-  email: z.string().email().optional(),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+  // Required: with sign-in by email or mobile, an email is half of who a person is.
+  email: emailSchema,
+  // Only used when the person is new to LeadBee. See memberService.addMember.
+  password: passwordSchema.optional(),
   role: z.enum(ROLE_ORDER as [string, ...string[]]).default(ROLES.USER),
   roleId: objectIdSchema.optional(),
   permissions: z.array(z.string()).optional(),
@@ -42,7 +55,7 @@ const createUserBody = z.object({
 
 const updateUserBody = z.object({
   name: z.string().trim().min(2).max(80).optional(),
-  email: z.string().email().optional().or(z.literal('')),
+  email: emailSchema.optional(),
   role: z.enum(ROLE_ORDER as [string, ...string[]]).optional(),
   roleId: objectIdSchema.nullable().optional(),
   permissions: z.array(z.string()).optional(),
@@ -155,13 +168,17 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
     preHandler: [app.requirePermission(PERMISSIONS.USERS_MANAGE)],
     schema: {
       tags: ['users'],
-      summary: 'Add a user to the organization',
+      summary: 'Add a person to the organization',
       description:
-        'The new user’s role may not rank above the caller’s, and any custom role ' +
-        'or extra permissions must be ones the caller already holds.',
+        'If the email and mobile already belong to someone on LeadBee, their ' +
+        'existing account is linked — they keep their own password — and the ' +
+        'response carries `linkedExistingAccount: true`. An email or mobile tied ' +
+        'to a different person answers 409. The role may not rank above the ' +
+        'caller’s, and any custom role or extra permissions must be ones the ' +
+        'caller already holds.',
       security,
       body: createUserBody,
-      response: { 201: okEnvelope, ...commonErrors, 402: commonErrors[400] },
+      response: { 201: okEnvelope, ...commonErrors, 402: commonErrors[400], 409: commonErrors[400] },
     },
     handler: async (request, reply) => {
       const actor = managerOf(request);
@@ -171,20 +188,18 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
       if (body.permissions) userPolicy.assertCanGrant(actor, body.permissions);
 
       const organizationId = requireOrganizationId();
-      const organization = request.auth!.organization;
-      await organizationService.assertCanAddUser(organization);
+      await organizationService.assertCanAddUser(request.auth!.organization);
 
       const roleId = await roleIdFor(actor, body.role, body.roleId);
 
-      const user = await User.create({
-        organizationId,
+      const { user, linkedExistingAccount } = await memberService.addMember(organizationId, {
         name: body.name,
-        phone: body.phone,
         email: body.email,
+        phone: body.phone,
         password: body.password,
-        role: body.role,
+        role: body.role as RoleName,
         roleId,
-        permissions: body.permissions ?? [],
+        permissions: body.permissions,
         designation: body.designation,
       });
 
@@ -195,11 +210,11 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
         entityType: 'user',
         entityId: user._id,
         actor: viewerOf(request),
-        after: auditView(user),
+        after: { ...auditView(user), linkedExistingAccount },
         origin: originOf(request),
       });
 
-      return reply.status(201).send(ok(user.toJSON()));
+      return reply.status(201).send(ok({ ...user.toJSON(), linkedExistingAccount }));
     },
   });
 
@@ -228,34 +243,36 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
       tags: ['users'],
       summary: 'Update a user',
       description:
-        'Changing `role` without naming a custom `roleId` re-points the user’s ' +
-        'permissions at that role’s built-in set. Nobody may change their own ' +
-        'role or permissions here.',
+        'Name and email belong to the person’s account, so they can be changed ' +
+        'here only when this organization is the only one the person belongs to ' +
+        '(409 otherwise). Changing `role` without naming a custom `roleId` ' +
+        're-points the user’s permissions at that role’s built-in set. Nobody ' +
+        'may change their own role or permissions here.',
       security,
       params: idParam,
       body: updateUserBody,
-      response: { 200: okEnvelope, ...commonErrors },
+      response: { 200: okEnvelope, ...commonErrors, 409: commonErrors[400] },
     },
     handler: async (request) => {
       const actor = managerOf(request);
-      const user = await User.findById(request.params.id);
-      if (!user) throw AppError.notFound('User not found');
+      const existing = await User.findById(request.params.id);
+      if (!existing) throw AppError.notFound('User not found');
 
-      userPolicy.assertCanManage(actor, { role: user.role });
-      const before = auditView(user);
+      userPolicy.assertCanManage(actor, { role: existing.role });
+      const before = auditView(existing);
 
       const body = request.body;
       const changesAccess =
         body.role !== undefined || body.roleId !== undefined || body.permissions !== undefined;
       if (changesAccess) {
-        userPolicy.assertNotSelf(actor, user._id.toString(), 'change the role or permissions of');
+        userPolicy.assertNotSelf(actor, existing._id.toString(), 'change the role or permissions of');
       }
       if (body.role !== undefined) userPolicy.assertCanAssignRole(actor, body.role);
       if (body.permissions !== undefined) userPolicy.assertCanGrant(actor, body.permissions);
 
       // The last owner must stay an owner, or the organization locks itself out
       // of its own user management.
-      if (body.role && user.role === ROLES.OWNER && body.role !== ROLES.OWNER) {
+      if (body.role && existing.role === ROLES.OWNER && body.role !== ROLES.OWNER) {
         const owners = await User.countDocuments({ role: ROLES.OWNER, isActive: true });
         if (owners <= 1) {
           throw AppError.conflict(
@@ -264,15 +281,36 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
-      if (body.name !== undefined) user.name = body.name;
-      if (body.email !== undefined) user.email = body.email || undefined;
-      if (body.role !== undefined || body.roleId !== undefined) {
-        // Resolved before `role` is overwritten: a role change that left roleId
-        // on the old role would keep the old permissions while `isOrganizer`
-        // followed the new role string.
-        user.roleId = await roleIdFor(actor, body.role ?? user.role, body.roleId ?? undefined);
+      // Resolved before anything is written, so a bad custom role cannot leave a
+      // name change saved and a role change refused. Resolved before `role` is
+      // overwritten too: a role change that left roleId on the old role would
+      // keep the old permissions while `isOrganizer` followed the new role string.
+      const nextRoleId =
+        body.role !== undefined || body.roleId !== undefined
+          ? await roleIdFor(actor, body.role ?? existing.role, body.roleId ?? undefined)
+          : undefined;
+
+      const changesIdentity =
+        (body.name !== undefined && body.name !== existing.name) ||
+        (body.email !== undefined && body.email !== existing.email);
+      if (changesIdentity) {
+        await identityService.assertSoleMembership(
+          existing.accountId,
+          requireOrganizationId(),
+          'change their name or email'
+        );
+        await identityService.updateIdentity(existing.accountId, {
+          name: body.name,
+          email: body.email,
+        });
       }
-      if (body.role !== undefined) user.role = body.role as typeof user.role;
+
+      // Re-read after an identity change: it rewrote this membership's copy.
+      const user = changesIdentity ? await User.findById(existing._id) : existing;
+      if (!user) throw AppError.notFound('User not found');
+
+      if (body.role !== undefined || body.roleId !== undefined) user.roleId = nextRoleId;
+      if (body.role !== undefined) user.role = body.role as RoleName;
       if (body.permissions !== undefined) user.permissions = body.permissions;
       if (body.designation !== undefined) user.designation = body.designation;
       if (body.avatarUrl !== undefined) user.avatarUrl = body.avatarUrl;
@@ -304,9 +342,10 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
       tags: ['users'],
       summary: 'Activate or deactivate a user',
       description:
-        'Deactivating also revokes every session, so access ends immediately ' +
-        'rather than when the access token happens to expire. Reactivating ' +
-        'takes a seat, so it is refused when the plan is full.',
+        'Membership only — the person’s account and their other organizations ' +
+        'are untouched. Deactivating also revokes this membership’s sessions, so ' +
+        'access ends immediately rather than when the access token happens to ' +
+        'expire. Reactivating takes a seat, so it is refused when the plan is full.',
       security,
       params: idParam,
       body: z.object({ isActive: z.boolean() }),
@@ -368,25 +407,29 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
       tags: ['users'],
       summary: 'Set a new password for a user (revokes their sessions)',
       description:
-        'Not for your own account — use /auth/change-password, which asks for ' +
-        'the current password first.',
+        'The password belongs to the person’s account, so this is refused (409) ' +
+        'when they also belong to another organization. Not for your own account ' +
+        '— use /auth/change-password, which asks for the current password first.',
       security,
       params: idParam,
-      body: z.object({ newPassword: z.string().min(6) }),
-      response: { 200: messageEnvelope, ...commonErrors },
+      body: z.object({ newPassword: passwordSchema }),
+      response: { 200: messageEnvelope, ...commonErrors, 409: commonErrors[400] },
     },
     handler: async (request) => {
       const actor = managerOf(request);
       userPolicy.assertNotSelf(actor, request.params.id, 'reset the password of');
 
-      const user = await User.findById(request.params.id).select('+password +refreshTokens');
+      const user = await User.findById(request.params.id);
       if (!user) throw AppError.notFound('User not found');
 
       userPolicy.assertCanManage(actor, { role: user.role });
 
-      user.password = request.body.newPassword;
-      user.refreshTokens = [];
-      await user.save();
+      await identityService.assertSoleMembership(
+        user.accountId,
+        requireOrganizationId(),
+        'reset their password'
+      );
+      await identityService.setPassword(user.accountId, request.body.newPassword);
 
       // That it happened, and who did it — never the value.
       await auditService.record({

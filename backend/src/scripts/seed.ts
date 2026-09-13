@@ -5,9 +5,9 @@ import { logger } from '../lib/logger.js';
 import { PlatformAdmin } from '../models/PlatformAdmin.js';
 import { Organization } from '../models/Organization.js';
 import { Lead } from '../models/Lead.js';
-import { User } from '../models/User.js';
 import { Project } from '../models/Project.js';
 import { organizationService } from '../modules/organizations/organization.service.js';
+import { memberService } from '../modules/users/member.service.js';
 import { runInTenantScope } from '../lib/tenantContext.js';
 import { nextDisplayNumber } from '../lib/counters.js';
 import {
@@ -24,6 +24,10 @@ import '../models/index.js';
  *
  * Safe to run repeatedly: it creates what is missing and leaves what exists
  * alone, so it can be pointed at a half-set-up environment without wiping it.
+ *
+ * People are created the way the product creates them — an account each, and a
+ * membership of the demo organization — so the seed exercises the same paths
+ * as signup and team management rather than a shortcut that could drift.
  */
 async function seed(): Promise<void> {
   await connectDatabase();
@@ -99,8 +103,7 @@ async function seed(): Promise<void> {
         .lean();
 
       const [manager, agent] = await Promise.all([
-        User.create({
-          organizationId: organization._id,
+        memberService.addMember(organization._id, {
           name: 'Manish Manager',
           phone: '9000000002',
           email: 'manager@acme.test',
@@ -108,8 +111,7 @@ async function seed(): Promise<void> {
           role: 'manager',
           roleId: (managerRole as { _id: mongoose.Types.ObjectId } | null)?._id,
         }),
-        User.create({
-          organizationId: organization._id,
+        memberService.addMember(organization._id, {
           name: 'Anil Agent',
           phone: '9000000003',
           email: 'agent@acme.test',
@@ -124,7 +126,7 @@ async function seed(): Promise<void> {
         { organizationId: organization._id, name: 'Green Valley', createdBy: owner._id, sortOrder: 1 },
       ]);
 
-      const agents = [owner._id, manager._id, agent._id];
+      const agents = [owner._id, manager.user._id, agent.user._id];
       const now = Date.now();
       const day = 24 * 60 * 60 * 1000;
 
@@ -165,7 +167,8 @@ async function seed(): Promise<void> {
   logger.info(
     {
       organization: organization.slug,
-      signIn: 'phone 9000000001 / 9000000002 / 9000000003, password Password@123',
+      signIn:
+        'owner@acme.test / manager@acme.test / agent@acme.test (or 9000000001-3), password Password@123',
     },
     'demo tenant seeded'
   );

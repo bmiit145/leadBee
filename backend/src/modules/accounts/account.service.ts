@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import bcrypt from 'bcryptjs';
 import {
   Account,
   ACCOUNT_STATUSES,
@@ -7,8 +6,7 @@ import {
   type PendingVerification,
 } from '../../models/Account.js';
 import { AppError } from '../../lib/errors.js';
-import { logger } from '../../lib/logger.js';
-import { mailer, maskEmail } from '../../lib/mailer.js';
+import { mailer } from '../../lib/mailer.js';
 import { env } from '../../config/env.js';
 import {
   VERIFICATION_CODE_TTL_MS,
@@ -20,24 +18,27 @@ import {
   resendAvailableAt,
   secretsMatch,
 } from './verificationCode.js';
+import { duplicateIdentity, identityConflict, identityService } from './identity.service.js';
 
 /**
  * Self-serve registration of a person, and confirmation of their email.
  *
- * Three properties this is built to hold:
+ * Properties this is built to hold:
  *
- * 1. **It is not an email oracle.** `register` and `resend` answer in the same
- *    shape, and at comparable cost, whether or not the address already has an
- *    account. Otherwise the form becomes a free way to test which of a
- *    competitor's staff use LeadBee.
- * 2. **A code cannot be brute-forced.** Guesses are spent atomically before
- *    the comparison, so five concurrent requests cannot share one attempt.
- * 3. **A code confirms the attempt that requested it.** Each registration gets
- *    a token; verifying needs the token *and* the code. Without this, someone
- *    who pre-registers a victim's address with their own password could wait
- *    for the victim to confirm the mailbox and inherit a verified account.
+ * 1. **An email and a mobile number each belong to one person.** Registering
+ *    an identifier already tied to someone else is refused with a reason
+ *    (ADR-0004). That tells the caller the identifier is taken — a trade-off
+ *    the product chose, bounded by the rate limits on these routes.
+ * 2. **An unconfirmed registration reserves nothing.** A newer registration
+ *    for the same email or mobile replaces it, so nobody can lock a person out
+ *    of LeadBee by registering their details first.
+ * 3. **A code cannot be brute-forced.** Guesses are spent atomically before the
+ *    comparison, so five concurrent requests cannot share one attempt.
+ * 4. **A code confirms the attempt that requested it.** Each registration gets a
+ *    token; verifying needs the token *and* the code. Verify and resend still
+ *    answer uniformly, so they reveal nothing beyond what register already does.
  *
- * See docs/adr/0003-pre-tenant-accounts.md.
+ * See docs/adr/0003-pre-tenant-accounts.md and docs/adr/0004-account-is-the-identity.md.
  */
 
 export const ACCOUNT_VERIFICATION_MAX_ATTEMPTS = VERIFICATION_MAX_ATTEMPTS;
@@ -83,7 +84,6 @@ const VERIFICATION_KEY = createHash('sha256')
   .update(`leadbee:account-verification:v1:${env.JWT_SECRET}`)
   .digest();
 
-const BCRYPT_COST = 12;
 const USER_AGENT_MAX = 300;
 
 const hash = (value: string): string => hashSecret(value, VERIFICATION_KEY);
@@ -96,24 +96,31 @@ export const accountService = {
     if (!env.ALLOW_SELF_SERVE_SIGNUP) {
       throw AppError.forbidden('Self-serve registration is disabled.');
     }
-    // Checked before any write, and on every path, so a missing mail setup is
-    // the same answer for an address that exists and one that does not.
+    // Before any write: a missing mail setup must not leave accounts nobody can verify.
     mailer.assertConfigured();
 
     const now = new Date();
-    const existing = await Account.findOne({ email: details.email }).select('+verification');
-    if (existing) return continueRegistration(existing, details, context, now);
+    const { resolution, byEmail } = await identityService.lookupIdentity(
+      details.email,
+      details.phone
+    );
 
+    if (resolution.kind === 'conflict') throw identityConflict(resolution.reason);
+
+    if (resolution.kind === 'existing') {
+      // The same person retrying an unconfirmed registration carries on with a
+      // fresh token. Anyone with a real account is sent to sign in.
+      if (!resolution.disposable) throw identityConflict('ACCOUNT_EXISTS');
+      return continueRegistration(byEmail!, details, context, now);
+    }
+
+    await identityService.removeSupersededRegistrations(resolution.supersede);
     try {
       return await createRegistration(details, context, now);
     } catch (error) {
-      // Two submissions for one new address can both miss the lookup above; the
-      // unique index lets exactly one create through. The other continues as a
-      // repeat registration rather than surfacing a 500.
-      if (!isDuplicateKey(error)) throw error;
-      const raced = await Account.findOne({ email: details.email }).select('+verification');
-      if (!raced) throw error;
-      return continueRegistration(raced, details, context, now);
+      // Two submissions for one new identity can both miss the lookup above; the
+      // unique indexes let exactly one through, and the other hears why.
+      throw duplicateIdentity(error) ?? error;
     }
   },
 
@@ -139,8 +146,7 @@ export const accountService = {
 
     const stored = spent?.verification;
     // Every failure is the same answer: wrong code, expired, out of guesses,
-    // unknown address, already verified. Distinguishing them would tell a
-    // prober which addresses are mid-registration.
+    // unknown address, already verified.
     if (!spent || !stored || !secretsMatch(hash(attempt.code), stored.codeHash)) {
       throw invalidCode();
     }
@@ -213,6 +219,7 @@ async function createRegistration(
   const account = await Account.create({
     ...details,
     status: ACCOUNT_STATUSES.ACTIVE,
+    source: 'registration',
     acceptedTermsAt: now,
     signupIp: context.ip,
     signupUserAgent: context.userAgent?.slice(0, USER_AGENT_MAX),
@@ -224,14 +231,9 @@ async function createRegistration(
 }
 
 /**
- * The address already has an account.
- *
- * - **Verified, or suspended:** nothing changes. The response is shaped exactly
- *   like a fresh registration, and a password hash is computed and thrown away
- *   so the timing matches too. The owner of a verified address gets a notice.
- * - **Still unverified:** the newest submission replaces the pending details
- *   and receives a new token. Proving the mailbox is what makes an account
- *   real, so the person who can do that should be the one whose details stick.
+ * The same email and mobile, still unconfirmed: the newest submission's details
+ * replace the pending ones and get a new token, so only the latest attempt can
+ * confirm.
  */
 async function continueRegistration(
   account: IAccount,
@@ -239,20 +241,10 @@ async function continueRegistration(
   context: RegistrationContext,
   now: Date
 ): Promise<RegistrationReceipt> {
-  const settled = Boolean(account.emailVerifiedAt) || account.status !== ACCOUNT_STATUSES.ACTIVE;
-  if (settled) {
-    await bcrypt.hash(details.password, BCRYPT_COST);
-    if (account.emailVerifiedAt && account.status === ACCOUNT_STATUSES.ACTIVE) {
-      await sendAlreadyRegisteredNotice(account);
-    }
-    return receipt(details.email, syntheticWindow(now), { token: generateToken() });
-  }
-
   const token = generateToken();
   const current = account.verification;
   // Inside the resend cooldown the existing code stays valid and no second
   // email goes out — a double tap on "Create account" should not mail twice.
-  // The token still rotates, so only the latest submission can confirm.
   const keepCode =
     current !== undefined && current.expiresAt > now && !canResend(current.sentAt, now);
 
@@ -273,7 +265,6 @@ async function continueRegistration(
 
   account.firstName = details.firstName;
   account.lastName = details.lastName;
-  account.phone = details.phone;
   account.password = details.password;
   account.acceptedTermsAt = now;
   account.signupIp = context.ip;
@@ -296,31 +287,6 @@ async function sendCode(account: Pick<IAccount, 'email' | 'firstName'>, code: st
       `Your LeadBee verification code is ${code}. It expires in 10 minutes.\n\n` +
       'If you did not create a LeadBee account, you can ignore this email.',
   });
-}
-
-/**
- * Tells a verified owner that someone tried to register their address.
- *
- * Swallowed on failure: this path must answer exactly like a fresh registration,
- * and a notice that could not be sent is not worth breaking that for.
- */
-async function sendAlreadyRegisteredNotice(account: Pick<IAccount, 'email' | 'firstName'>) {
-  try {
-    await mailer.send({
-      to: account.email,
-      subject: 'Someone tried to register with your email',
-      text:
-        `Hi ${account.firstName},\n\n` +
-        'Someone just tried to create a LeadBee account with this email address. ' +
-        'You already have one, so nothing was changed.\n\n' +
-        'If this was you, sign in instead. If not, you can ignore this email.',
-    });
-  } catch (error) {
-    logger.warn(
-      { err: error, to: maskEmail(account.email) },
-      'already-registered notice not sent'
-    );
-  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -360,10 +326,4 @@ function receipt(
     resendAvailableAt: resendAvailableAt(window.sentAt).toISOString(),
     ...(extras.code && !env.isProduction ? { devCode: extras.code } : {}),
   };
-}
-
-function isDuplicateKey(error: unknown): boolean {
-  return (
-    typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000
-  );
 }

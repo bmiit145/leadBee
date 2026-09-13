@@ -4,6 +4,7 @@ import { Types } from 'mongoose';
 import { Organization } from '../models/Organization.js';
 import { PlatformAdmin } from '../models/PlatformAdmin.js';
 import { User } from '../models/User.js';
+import { Account } from '../models/Account.js';
 import { Role } from '../models/Role.js';
 import { AppError } from '../lib/errors.js';
 import {
@@ -74,6 +75,16 @@ export const authPlugin = fp(async function authPlugin(app: FastifyInstance) {
         throw AppError.forbidden('This account has been deactivated.');
       }
 
+      // The person behind the membership, checked on every request for the same
+      // reason permissions are recomputed below: suspending an account must end
+      // access now, in every organization, not when this access token happens to
+      // expire (ARCH-9). One indexed read by primary key.
+      const account = await Account.findById(user.accountId)
+        .select('status')
+        .lean<{ status: string }>();
+      if (!account) throw AppError.unauthorized('Account not found');
+      if (account.status !== 'active') throw AppError.accountSuspended();
+
       // Permissions are recomputed from the database rather than trusted from
       // the token. Costs one indexed read; buys immediate revocation instead of
       // "revoked, but still works until the access token expires". If this ever
@@ -93,6 +104,7 @@ export const authPlugin = fp(async function authPlugin(app: FastifyInstance) {
         user,
         organization,
         userId,
+        accountId: user.accountId,
         organizationId,
         role: user.role,
         permissions,

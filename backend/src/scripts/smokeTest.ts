@@ -8,6 +8,7 @@ import { Notification } from '../models/Notification.js';
 import { LeadDropReason } from '../models/LeadDropReason.js';
 import { PurposeOfInquiry } from '../models/PurposeOfInquiry.js';
 import { Account } from '../models/Account.js';
+import { Role } from '../models/Role.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { LEAD_STAGE_ORDER } from '../config/constants.js';
 import { withoutTenantScope } from '../lib/tenantContext.js';
@@ -65,7 +66,7 @@ async function main(): Promise<void> {
   check('Wrong password is rejected', badLogin.statusCode === 401, badLogin.statusCode);
   check(
     'Failure message does not reveal whether the phone exists',
-    /invalid phone number or password/i.test(badLogin.json()?.error?.message ?? ''),
+    /invalid email, mobile number or password/i.test(badLogin.json()?.error?.message ?? ''),
     badLogin.json()?.error?.message
   );
 
@@ -75,6 +76,15 @@ async function main(): Promise<void> {
     payload: { phone: '9000000001', password: 'Password@123' },
   });
   check('Owner can sign in', login.statusCode === 200, login.json());
+
+  // One person, one account: the same password works with the email too. The
+  // login above sends `phone`, the field older app builds still use.
+  const emailLogin = await app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/login',
+    payload: { identifier: 'owner@acme.test', password: 'Password@123' },
+  });
+  check('Owner can sign in with their email instead of their mobile', emailLogin.statusCode === 200, emailLogin.json());
 
   const ownerToken = login.json()?.data?.accessToken as string;
   const ownerAuth = { authorization: `Bearer ${ownerToken}` };
@@ -453,6 +463,10 @@ async function main(): Promise<void> {
   section('Cross-tenant isolation (the one that matters)');
 
   const secondOrgSlug = `smoke-tenant-${Date.now()}`;
+  // Kept, not inlined: the account checks later sign this owner in by email and
+  // the cleanup removes their account.
+  const tenantBOwnerEmail = `owner-${Date.now()}@smoke.test`;
+  const tenantBOwnerPhone = `9${Date.now().toString().slice(-9)}`;
   const signup = await app.inject({
     method: 'POST',
     url: '/api/v1/signup',
@@ -460,8 +474,8 @@ async function main(): Promise<void> {
       organizationName: 'Smoke Tenant',
       slug: secondOrgSlug,
       ownerName: 'Second Owner',
-      ownerPhone: `9${Date.now().toString().slice(-9)}`,
-      ownerEmail: `owner-${Date.now()}@smoke.test`,
+      ownerPhone: tenantBOwnerPhone,
+      ownerEmail: tenantBOwnerEmail,
       password: 'Password@123',
     },
   });
@@ -640,7 +654,9 @@ async function main(): Promise<void> {
     firstName: 'Smoke',
     lastName: 'Registrant',
     email: accountEmail,
-    phone: `9${Date.now().toString().slice(-9)}`,
+    // Each smoke identity gets its own leading digit, so no two collide now that
+    // a mobile number belongs to one person.
+    phone: `7${Date.now().toString().slice(-9)}`,
     password: 'Password@123',
     acceptedTerms: true,
   };
@@ -718,22 +734,42 @@ async function main(): Promise<void> {
   });
   check('The emailed code confirms the address', confirmed.statusCode === 200, confirmed.json());
 
+  // An email and a mobile number each belong to one person (ADR-0004), and
+  // registration says so plainly.
   const repeatVerified = await registerAccount(registration);
-  const repeatReceipt = repeatVerified.json()?.data ?? {};
-  const receiptKeys = (receipt: Record<string, unknown>) =>
-    Object.keys(receipt)
-      .filter((key) => key !== 'devCode')
-      .sort()
-      .join(',');
   check(
-    'Registering a verified address answers exactly like a new registration, with no code',
-    repeatVerified.statusCode === 202 &&
-      repeatReceipt.devCode === undefined &&
-      receiptKeys(repeatReceipt) === receiptKeys(firstReceipt ?? {}),
-    repeatReceipt
+    'Registering an email and mobile that already have an account is refused',
+    repeatVerified.statusCode === 409 && repeatVerified.json()?.error?.code === 'ACCOUNT_EXISTS',
+    repeatVerified.json()
   );
 
-  const lockRegistration = await registerAccount({ ...registration, email: lockEmail });
+  const takenEmail = await registerAccount({
+    ...registration,
+    email: 'owner@acme.test',
+    phone: `6${Date.now().toString().slice(-9)}`,
+  });
+  check(
+    'An email already tied to another mobile cannot be registered again',
+    takenEmail.statusCode === 409 && takenEmail.json()?.error?.code === 'EMAIL_IN_USE',
+    takenEmail.json()
+  );
+
+  const takenPhone = await registerAccount({
+    ...registration,
+    email: `smoke-phone-${Date.now()}@leadbee.test`,
+    phone: '9000000001',
+  });
+  check(
+    'A mobile already tied to another email cannot be registered again',
+    takenPhone.statusCode === 409 && takenPhone.json()?.error?.code === 'PHONE_IN_USE',
+    takenPhone.json()
+  );
+
+  const lockRegistration = await registerAccount({
+    ...registration,
+    email: lockEmail,
+    phone: `8${Date.now().toString().slice(-9)}`,
+  });
   const lockReceipt = lockRegistration.json()?.data;
   const lockWrong = lockReceipt?.devCode === '000000' ? '111111' : '000000';
   for (let guess = 0; guess < 5; guess += 1) {
@@ -927,6 +963,90 @@ async function main(): Promise<void> {
   });
   check('A deleted account is gone', afterDelete.statusCode === 404, afterDelete.statusCode);
 
+  // ─── A member is a person with an account ───────────────────────────────────
+  const ownerAccount = await findAccount('owner@acme.test');
+  const ownerAccountId = String(ownerAccount?._id);
+  check(
+    'An organization member appears as an account, with the organization counted',
+    (ownerAccount?.organizations as { count?: number } | undefined)?.count === 1,
+    ownerAccount
+  );
+
+  const ownerDetail = await app.inject({
+    method: 'GET',
+    url: `/api/v1/platform/accounts/${ownerAccountId}`,
+    headers: platformAuth,
+  });
+  const ownerMembership = ownerDetail.json()?.data?.memberships?.[0];
+  check(
+    'Account detail lists the membership with its organization and role',
+    ownerMembership?.role === 'owner' && Boolean(ownerMembership?.organization?.name),
+    ownerDetail.json()?.data?.memberships
+  );
+
+  const deleteMember = await app.inject({
+    method: 'DELETE',
+    url: `/api/v1/platform/accounts/${ownerAccountId}`,
+    headers: platformAuth,
+    payload: { reason: 'Smoke test', confirmEmail: 'owner@acme.test' },
+  });
+  check(
+    'An account that still belongs to an organization cannot be deleted',
+    deleteMember.statusCode === 409,
+    deleteMember.statusCode
+  );
+
+  // Suspension follows the person into every organization, including a token
+  // they already hold.
+  const tenantBAccountId = String((await findAccount(tenantBOwnerEmail))?._id);
+  const setTenantBAccount = (payload: Record<string, unknown>) =>
+    app.inject({
+      method: 'PATCH',
+      url: `/api/v1/platform/accounts/${tenantBAccountId}/status`,
+      headers: platformAuth,
+      payload,
+    });
+
+  const suspendPerson = await setTenantBAccount({
+    status: 'suspended',
+    reason: 'Smoke test account suspension',
+  });
+  check('A member’s account can be suspended', suspendPerson.statusCode === 200, suspendPerson.json());
+
+  const suspendedToken = await app.inject({
+    method: 'GET',
+    url: '/api/v1/leads',
+    headers: tenantBAuth,
+  });
+  check(
+    'Suspending the account blocks a token it already holds',
+    suspendedToken.statusCode === 403 && suspendedToken.json()?.error?.code === 'ACCOUNT_SUSPENDED',
+    suspendedToken.json()
+  );
+
+  const suspendedLogin = await app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/login',
+    payload: { identifier: tenantBOwnerEmail, password: 'Password@123' },
+  });
+  check(
+    'A suspended account cannot sign in',
+    suspendedLogin.statusCode === 403 && suspendedLogin.json()?.error?.code === 'ACCOUNT_SUSPENDED',
+    suspendedLogin.json()
+  );
+
+  await setTenantBAccount({ status: 'active' });
+  const restoredLogin = await app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/login',
+    payload: { identifier: tenantBOwnerEmail, password: 'Password@123' },
+  });
+  check(
+    'Reactivated, the person signs in with their email again',
+    restoredLogin.statusCode === 200,
+    restoredLogin.json()
+  );
+
   const platformTokenOnTenant = await app.inject({
     method: 'GET',
     url: '/api/v1/leads',
@@ -944,6 +1064,113 @@ async function main(): Promise<void> {
     headers: platformAuth,
   });
   check('Control plane lists organizations', orgs.statusCode === 200);
+
+  // ─── Provisioning creates or links the owner's account (ADR-0004) ───────────
+  // The console's "Provision tenant" dialog calls exactly this endpoint.
+  const provisionStamp = Date.now();
+  const provisionedOwnerEmail = `provisioned-${provisionStamp}@smoke.test`;
+  const provisionOrg = (payload: Record<string, unknown>) =>
+    app.inject({
+      method: 'POST',
+      url: '/api/v1/platform/organizations',
+      headers: platformAuth,
+      payload: { status: 'active', ...payload },
+    });
+
+  const provisionNew = await provisionOrg({
+    organizationName: `Smoke Provisioned ${provisionStamp}`,
+    ownerName: 'Provisioned Owner',
+    ownerPhone: `6${provisionStamp.toString().slice(-9)}`,
+    ownerEmail: provisionedOwnerEmail,
+    ownerPassword: 'Password@123',
+  });
+  const provisionedOrgName = provisionNew.json()?.data?.organization?.name as string | undefined;
+  const provisionedOrgId = provisionNew.json()?.data?.organization?._id as string | undefined;
+  check(
+    'Provisioning a tenant for a new person creates their account',
+    provisionNew.statusCode === 201 && provisionNew.json()?.data?.ownerAccountCreated === true,
+    provisionNew.json()
+  );
+
+  const provisionedLogin = await app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/login',
+    payload: { identifier: provisionedOwnerEmail, password: 'Password@123' },
+  });
+  check(
+    'The provisioned owner signs in with their email and lands in the new organization',
+    provisionedLogin.statusCode === 200 &&
+      provisionedLogin.json()?.data?.organization?._id === provisionedOrgId,
+    provisionedLogin.json()
+  );
+
+  const provisionedAccount = await findAccount(provisionedOwnerEmail);
+  check(
+    'The provisioned owner appears in Accounts with the organization',
+    (provisionedAccount?.organizations as { names?: string[] } | undefined)?.names?.includes(
+      provisionedOrgName ?? ''
+    ) === true,
+    provisionedAccount
+  );
+
+  // An existing person: linked, not duplicated, and no password needed.
+  const provisionLinked = await provisionOrg({
+    organizationName: `Smoke Linked ${provisionStamp}`,
+    ownerName: 'Manish Manager',
+    ownerPhone: '9000000002',
+    ownerEmail: 'manager@acme.test',
+  });
+  const linkedOrgId = provisionLinked.json()?.data?.organization?._id as string | undefined;
+  check(
+    'Provisioning for someone who already has an account links it, without a password',
+    provisionLinked.statusCode === 201 && provisionLinked.json()?.data?.ownerAccountCreated === false,
+    provisionLinked.json()
+  );
+
+  const twoOrgLogin = await app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/login',
+    payload: { identifier: 'manager@acme.test', password: 'Password@123' },
+  });
+  check(
+    'That person now has one sign-in for both organizations',
+    twoOrgLogin.statusCode === 409 &&
+      twoOrgLogin.json()?.error?.code === 'ORGANIZATION_SELECTION_REQUIRED' &&
+      twoOrgLogin.json()?.error?.details?.organizations?.length === 2,
+    twoOrgLogin.json()
+  );
+
+  const newWithoutPassword = await provisionOrg({
+    organizationName: `Smoke No Password ${provisionStamp}`,
+    ownerName: 'No Password',
+    ownerPhone: `6${(provisionStamp + 1).toString().slice(-9)}`,
+    ownerEmail: `no-password-${provisionStamp}@smoke.test`,
+  });
+  check(
+    'A new owner without a password is refused before anything is created',
+    newWithoutPassword.statusCode === 400,
+    newWithoutPassword.json()
+  );
+
+  const conflictSlug = `smoke-conflict-${provisionStamp}`;
+  const provisionConflict = await provisionOrg({
+    organizationName: `Smoke Conflict ${provisionStamp}`,
+    slug: conflictSlug,
+    ownerName: 'Somebody Else',
+    ownerPhone: `6${(provisionStamp + 2).toString().slice(-9)}`,
+    ownerEmail: 'owner@acme.test',
+    ownerPassword: 'Password@123',
+  });
+  const conflictOrgExists = await withoutTenantScope('smoke test verification', () =>
+    Organization.exists({ slug: conflictSlug })
+  );
+  check(
+    'An owner email already tied to another phone is refused, and no organization is left behind',
+    provisionConflict.statusCode === 409 &&
+      provisionConflict.json()?.error?.code === 'EMAIL_IN_USE' &&
+      conflictOrgExists === null,
+    provisionConflict.json()
+  );
   check(
     'Control plane sees across tenants',
     (orgs.json()?.total ?? 0) >= 2,
@@ -1029,7 +1256,21 @@ async function main(): Promise<void> {
     await PurposeOfInquiry.deleteOne({ _id: purposeId });
     // Normally already erased through the console; this catches a run that
     // failed part-way.
-    await Account.deleteMany({ email: { $in: [accountEmail, lockEmail] } });
+    await Account.deleteMany({
+      email: { $in: [accountEmail, lockEmail, tenantBOwnerEmail, provisionedOwnerEmail] },
+    });
+    // The provisioned organizations. The linked one's owner is the seeded
+    // manager, whose account stays — only that extra membership goes.
+    for (const organizationId of [provisionedOrgId, linkedOrgId]) {
+      if (!organizationId) continue;
+      await Lead.deleteMany({ organizationId });
+      await User.deleteMany({ organizationId });
+      await Role.deleteMany({ organizationId });
+      await LeadDropReason.deleteMany({ organizationId });
+      await PurposeOfInquiry.deleteMany({ organizationId });
+      await Notification.deleteMany({ organizationId });
+      await Organization.deleteOne({ _id: organizationId });
+    }
   });
 
   await app.close();

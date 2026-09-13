@@ -11,8 +11,11 @@ import { apiErrorMessage } from '../../src/services/api';
 import { ScreenHeader, ListCard, ListRow, ListSectionTitle } from '../../src/components/ui';
 import { colors, spacing } from '../../src/theme';
 
-/** Mirrors `changePasswordBody` on the API. */
-const MIN_PASSWORD_LENGTH = 6;
+/**
+ * Mirrors `changePasswordBody` on the API. Eight, because this one password now
+ * signs the person in to every organization they belong to.
+ */
+const MIN_PASSWORD_LENGTH = 8;
 
 /**
  * Account settings — only what LeadBee actually supports.

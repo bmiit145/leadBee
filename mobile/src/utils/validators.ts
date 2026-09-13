@@ -46,15 +46,18 @@ export function normalizePhone(raw: string): string {
 }
 
 /**
- * Sign-in is deliberately lenient about *shape*: an account created before the
- * number rules tightened must still be able to log in. It is normalised so the
- * lookup matches however the number was typed, and the password is what decides.
+ * One sign-in field for an email or a mobile number, told apart by an `@`.
+ *
+ * Deliberately lenient about *shape*: an account created before the number
+ * rules tightened must still be able to sign in. A number is normalised so the
+ * lookup matches however it was typed, an email is lower-cased, and the
+ * password is what decides.
  */
-const loginPhone = z
+const loginIdentifier = z
   .string()
   .trim()
-  .min(1, 'Phone number is required')
-  .transform(normalizePhone);
+  .min(1, 'Enter your email or mobile number')
+  .transform((value) => (value.includes('@') ? value.toLowerCase() : normalizePhone(value)));
 
 /** Creating an account holds the number to the same rule the API enforces. */
 const newAccountPhone = z
@@ -65,8 +68,10 @@ const newAccountPhone = z
   .transform(normalizePhone);
 
 export const loginSchema = z.object({
-  phone: loginPhone,
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+  identifier: loginIdentifier,
+  // Only presence here: older passwords may be shorter than today's minimum,
+  // and refusing them on the phone would lock those people out.
+  password: z.string().min(1, 'Password is required'),
 });
 
 export type LoginFormData = z.infer<typeof loginSchema>;

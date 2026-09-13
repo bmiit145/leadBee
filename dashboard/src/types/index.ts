@@ -123,6 +123,8 @@ export interface TenantUser {
   isActive: boolean;
   lastLoginAt?: string;
   createdAt: string;
+  /** The person behind this membership. Absent only on rows from before the backfill. */
+  accountId?: string;
 }
 
 export interface PlatformAdmin {
@@ -176,12 +178,27 @@ export interface Account {
   email: string;
   phone: string;
   status: AccountStatus;
+  /** How the account came to exist: self-registration, an organization, or the backfill. */
+  source: 'registration' | 'organization' | 'backfill';
   emailVerifiedAt: string | null;
   emailVerifiedVia: 'code' | 'platform_admin' | null;
   suspendedAt: string | null;
   suspendedReason: string | null;
+  lastLoginAt: string | null;
+  /** On list rows only: how many organizations, and the first few names. */
+  organizations?: { count: number; names: string[] };
   createdAt: string;
   updatedAt: string;
+}
+
+/** One organization a person belongs to. */
+export interface AccountMembership {
+  _id: string;
+  organization: { _id: string; name: string; slug: string; status: OrgStatus } | null;
+  role: string;
+  isActive: boolean;
+  lastLoginAt: string | null;
+  joinedAt: string;
 }
 
 export interface AccountActivityEntry {
@@ -208,6 +225,7 @@ export interface AccountDetail extends Account {
     maxAttempts: number;
     expired: boolean;
   } | null;
+  memberships: AccountMembership[];
   activity: AccountActivityEntry[];
 }
 
@@ -218,6 +236,8 @@ export interface AccountStats {
   suspended: number;
   last7Days: number;
   last30Days: number;
+  /** Accounts with at least one organization membership. */
+  inOrganizations: number;
   generatedAt: string;
 }
 

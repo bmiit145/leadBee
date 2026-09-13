@@ -20,8 +20,8 @@ const signupBody = z.object({
     .optional(),
   ownerName: z.string().trim().min(2, 'Your name is required').max(80),
   ownerPhone: mobilePhoneSchema,
-  ownerEmail: z.string().email('A valid email is required'),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
+  ownerEmail: z.string().trim().toLowerCase().email('A valid email is required').max(254),
+  password: z.string().min(8, 'Password must be at least 8 characters').max(128),
 });
 
 export async function signupRoutes(app: FastifyInstance): Promise<void> {
@@ -30,18 +30,21 @@ export async function signupRoutes(app: FastifyInstance): Promise<void> {
   r.route({
     method: 'POST',
     url: '/',
-    // Signup creates a tenant — expensive and abusable. Tighter than the
-    // default, keyed on IP since there is no account yet.
+    // Public by design (BE-11). Signup creates a tenant — expensive and
+    // abusable. Tighter than the default, keyed on IP since there is no account yet.
     config: { rateLimit: { max: 5, timeWindow: '1 hour' } },
     schema: {
       tags: ['signup'],
       summary: 'Create an organization and its owner (self-serve)',
       description:
-        'Creates a trialing organization, its built-in roles, an owner user and ' +
-        'starter lookups, then signs the owner in. Disabled when ' +
+        'Creates a trialing organization, its built-in roles, the owner’s ' +
+        'membership and starter lookups, then signs the owner in. When the email ' +
+        'and mobile already have a LeadBee account, `password` must be that ' +
+        'account’s password (409 `ACCOUNT_EXISTS` otherwise); an email or mobile ' +
+        'tied to a different person answers 409. Disabled when ' +
         '`ALLOW_SELF_SERVE_SIGNUP=false`.',
       body: signupBody,
-      response: { 201: okEnvelope, ...commonErrors },
+      response: { 201: okEnvelope, ...commonErrors, 409: commonErrors[400] },
     },
     handler: async (request, reply) => {
       if (!env.ALLOW_SELF_SERVE_SIGNUP) {
@@ -58,13 +61,14 @@ export async function signupRoutes(app: FastifyInstance): Promise<void> {
         ownerPhone: body.ownerPhone,
         ownerEmail: body.ownerEmail,
         ownerPassword: body.password,
+        requireOwnerPassword: true,
         source: 'self_serve',
       });
 
       // Sign the owner straight in — a signup that ends on a login screen is a
       // signup that loses people.
       const result = await authService.login(
-        body.ownerPhone,
+        body.ownerEmail,
         body.password,
         organization._id.toString()
       );

@@ -33,6 +33,10 @@ const EMPTY: FormState = {
   plan: '',
 };
 
+const MIN_PASSWORD = 8;
+/** Loose on purpose: the API owns the real rule; this only catches typos early. */
+const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
+
 /** `Acme Realty Pvt. Ltd.` → `acme-realty-pvt-ltd`, mirroring the server. */
 function slugify(input: string): string {
   return input
@@ -43,6 +47,15 @@ function slugify(input: string): string {
     .slice(0, 50);
 }
 
+/**
+ * Provision an organization for a sales-led customer.
+ *
+ * The owner is a person, and a person has one LeadBee account (ADR-0004). If the
+ * email and phone already belong to someone, the organization is created with
+ * that account as its owner and the password here is not used — they keep the
+ * one they sign in with. An email or phone that belongs to a *different* person
+ * is refused by the API, and nothing is created.
+ */
 export function CreateOrgDialog({
   open,
   onClose,
@@ -54,8 +67,10 @@ export function CreateOrgDialog({
   // Once the operator edits the handle by hand, stop overwriting it from the name.
   const [slugTouched, setSlugTouched] = useState(false);
   // Errors are shown once the operator has left the field or tried to submit,
-  // so a number is not marked wrong while it is still being typed.
+  // so a value is not marked wrong while it is still being typed.
   const [phoneTouched, setPhoneTouched] = useState(false);
+  const [emailTouched, setEmailTouched] = useState(false);
+  const [passwordTouched, setPasswordTouched] = useState(false);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
@@ -71,6 +86,17 @@ export function CreateOrgDialog({
     }
   }, [plans, form.plan]);
 
+  const emailError =
+    emailTouched && !EMAIL_PATTERN.test(form.ownerEmail.trim())
+      ? 'Enter the owner’s email — they can sign in with it.'
+      : undefined;
+  // Optional, because an existing account keeps its own password. When given,
+  // it must meet the same minimum the API enforces.
+  const passwordError =
+    passwordTouched && form.ownerPassword.length > 0 && form.ownerPassword.length < MIN_PASSWORD
+      ? `At least ${MIN_PASSWORD} characters.`
+      : undefined;
+
   const mutation = useMutation({
     mutationFn: () =>
       platformService.createOrganization({
@@ -78,20 +104,32 @@ export function CreateOrgDialog({
         slug: form.slug || undefined,
         ownerName: form.ownerName,
         ownerPhone: form.ownerPhone,
-        ownerEmail: form.ownerEmail,
-        ownerPassword: form.ownerPassword,
+        ownerEmail: form.ownerEmail.trim(),
+        ownerPassword: form.ownerPassword || undefined,
         plan: form.plan,
         // Provisioned tenants start active — a sales-led customer should not
         // land in a trial that quietly expires on them.
         status: 'active',
       }),
     onSuccess: (result) => {
-      toast.success(`${result.organization.name} provisioned`);
+      if (result.ownerAccountCreated) {
+        toast.success(`${result.organization.name} provisioned`);
+      } else {
+        // Say so plainly: an operator who typed a password must not go and
+        // share it, because it is not the one this person signs in with.
+        toast.success(
+          `${result.organization.name} provisioned. ${result.owner.name} already had a LeadBee account, so they were made owner with it and keep their own password.`,
+          { duration: 8000 }
+        );
+      }
       void queryClient.invalidateQueries({ queryKey: ['platform', 'organizations'] });
+      void queryClient.invalidateQueries({ queryKey: ['platform', 'accounts'] });
       void queryClient.invalidateQueries({ queryKey: ['platform', 'metrics'] });
       handleClose();
       navigate(`/organizations/${result.organization._id}`);
     },
+    // 409 names the clash — "This email is already linked to a different mobile
+    // number" — and 400 asks for a password when the owner is new.
     onError: (error) => toast.error(errorMessage(error, 'Could not provision tenant')),
   });
 
@@ -99,6 +137,8 @@ export function CreateOrgDialog({
     setForm(EMPTY);
     setSlugTouched(false);
     setPhoneTouched(false);
+    setEmailTouched(false);
+    setPasswordTouched(false);
     mutation.reset();
     onClose();
   }
@@ -119,8 +159,13 @@ export function CreateOrgDialog({
     // The form is `noValidate`, so nothing else stops a submit. Without this the
     // owner phone reaches the API unchecked — which is how a nine-digit number
     // was provisioned as an owner who could then never sign in.
-    if (!isValidMobilePhone(form.ownerPhone)) {
+    const phoneOk = isValidMobilePhone(form.ownerPhone);
+    const emailOk = EMAIL_PATTERN.test(form.ownerEmail.trim());
+    const passwordOk = form.ownerPassword.length === 0 || form.ownerPassword.length >= MIN_PASSWORD;
+    if (!phoneOk || !emailOk || !passwordOk) {
       setPhoneTouched(true);
+      setEmailTouched(true);
+      setPasswordTouched(true);
       return;
     }
 
@@ -150,7 +195,8 @@ export function CreateOrgDialog({
             Provision a tenant
           </h2>
           <p className="mt-0.5 text-[13px] text-[var(--text-muted)]">
-            Creates the organization, its built-in roles and the owner account.
+            Creates the organization and its built-in roles, and makes the owner a member.
+            If the owner already has a LeadBee account, that account is used.
           </p>
         </div>
 
@@ -199,7 +245,7 @@ export function CreateOrgDialog({
             <Field
               label="Owner phone"
               htmlFor="ownerPhone"
-              hint="Used to sign in"
+              hint="They can sign in with this or their email"
               error={phoneTouched ? mobilePhoneError(form.ownerPhone) : undefined}
             >
               <Input
@@ -216,13 +262,19 @@ export function CreateOrgDialog({
             </Field>
           </div>
 
-          <Field label="Owner email" htmlFor="ownerEmail">
+          <Field
+            label="Owner email"
+            htmlFor="ownerEmail"
+            hint="Must not already belong to someone with a different phone."
+            error={emailError}
+          >
             <Input
               id="ownerEmail"
               type="email"
               required
               value={form.ownerEmail}
               onChange={(e) => update('ownerEmail', e.target.value)}
+              onBlur={() => setEmailTouched(true)}
               placeholder="asha@acme.com"
             />
           </Field>
@@ -230,14 +282,17 @@ export function CreateOrgDialog({
           <Field
             label="Temporary password"
             htmlFor="ownerPassword"
-            hint="At least 8 characters. Share it over a channel you trust."
+            hint="Needed only if the owner is new to LeadBee — at least 8 characters, shared over a channel you trust. Someone who already has an account keeps their own password."
+            error={passwordError}
           >
             <Input
               id="ownerPassword"
-              required
-              minLength={8}
+              type="password"
+              autoComplete="new-password"
+              minLength={MIN_PASSWORD}
               value={form.ownerPassword}
               onChange={(e) => update('ownerPassword', e.target.value)}
+              onBlur={() => setPasswordTouched(true)}
               placeholder="••••••••"
             />
           </Field>

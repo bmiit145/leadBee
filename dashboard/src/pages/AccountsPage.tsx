@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { Search, UserRound } from 'lucide-react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import { Ban, CheckCircle2, Eye, MailCheck, Search, Trash2, UserRound } from 'lucide-react';
 import { platformService, queryKeys, type AccountListParams } from '@/services/platform.service';
 import { errorMessage } from '@/services/api';
 import { cn, formatDateTime, formatNumber, formatRelative } from '@/lib/utils';
+import { useAuth } from '@/stores/auth.store';
 import { Button } from '@/components/ui/Button';
 import {
   Card,
@@ -20,21 +22,34 @@ import {
   Th,
   Tr,
 } from '@/components/ui/primitives';
+import { RowActionsMenu, type RowAction } from '@/components/ui/RowActionsMenu';
 import { AccountStatusChip, VerificationChip } from '@/components/accounts/AccountChips';
-import type { AccountStatus, AccountVerificationFilter } from '@/types';
+import { AccountActionDialog } from '@/components/accounts/AccountActionDialog';
+import type { Account, AccountDetail, AccountStatus, AccountVerificationFilter } from '@/types';
 
 const PAGE_SIZE = 25;
-const COLUMNS = 5;
+/** Person, mobile, organizations, email, status, registered, and the row menu. */
+const COLUMNS = 7;
+
+/** An action that needs confirmation before it runs. */
+type PendingDialog = { kind: 'suspend' | 'verify' | 'delete'; account: Account };
 
 /**
- * Everyone who has registered in the app — before, and whether or not, they
- * belong to an organization.
+ * Everyone who has registered in the app or belongs to an organization.
  *
  * Filters live in the URL, like the organizations list, so a filtered view can
- * be shared with a colleague and survives a reload.
+ * be shared with a colleague and survives a reload. Per-row actions sit behind
+ * one "⋮" menu, which offers only what the signed-in admin may do and what
+ * applies to that person.
  */
 export function AccountsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const { can } = useAuth();
+  const canManage = can('accounts.manage');
+  const canDelete = can('accounts.delete');
+  const queryClient = useQueryClient();
+  const [dialog, setDialog] = useState<PendingDialog | null>(null);
 
   const status = (searchParams.get('status') as AccountStatus | null) ?? undefined;
   const verification =
@@ -82,6 +97,107 @@ export function AccountsPage() {
     queryFn: () => platformService.accountStats(),
   });
 
+  // ─── Actions ────────────────────────────────────────────────────────────────
+
+  /** A write returned fresh detail: keep the detail page warm and refresh the lists. */
+  function applyChange(detail?: AccountDetail) {
+    if (detail) queryClient.setQueryData(queryKeys.account(detail._id), detail);
+    void queryClient.invalidateQueries({ queryKey: ['platform', 'accounts'] });
+    void queryClient.invalidateQueries({ queryKey: ['platform', 'audit'] });
+  }
+
+  const setStatus = useMutation({
+    mutationFn: ({ id, next, reason }: { id: string; next: AccountStatus; reason?: string }) =>
+      platformService.setAccountStatus(id, next, reason),
+    onSuccess: (detail) => {
+      setDialog(null);
+      applyChange(detail);
+      toast.success(
+        detail.status === 'suspended' ? `${detail.name} suspended` : `${detail.name} reactivated`
+      );
+    },
+    onError: (error) => toast.error(errorMessage(error, 'Could not change the account status')),
+  });
+
+  const verifyEmail = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      platformService.verifyAccountEmail(id, reason),
+    onSuccess: (detail) => {
+      setDialog(null);
+      applyChange(detail);
+      toast.success(`${detail.name}’s email marked as verified`);
+    },
+    onError: (error) => toast.error(errorMessage(error, 'Could not verify the email')),
+  });
+
+  const deleteAccount = useMutation({
+    mutationFn: ({ id, reason, confirmEmail }: { id: string; reason: string; confirmEmail: string }) =>
+      platformService.deleteAccount(id, reason, confirmEmail),
+    onSuccess: (_result, variables) => {
+      setDialog(null);
+      queryClient.removeQueries({ queryKey: queryKeys.account(variables.id) });
+      applyChange();
+      toast.success('Account deleted');
+    },
+    onError: (error) => toast.error(errorMessage(error, 'Could not delete the account')),
+  });
+
+  function actionsFor(account: Account): RowAction[] {
+    const inOrganizations = (account.organizations?.count ?? 0) > 0;
+    const actions: RowAction[] = [
+      {
+        key: 'view',
+        label: 'View details',
+        icon: <Eye className="h-4 w-4" />,
+        onSelect: () => navigate(`/accounts/${account._id}`),
+      },
+    ];
+
+    if (canManage && !account.emailVerifiedAt) {
+      actions.push({
+        key: 'verify',
+        label: 'Mark email verified',
+        icon: <MailCheck className="h-4 w-4" />,
+        onSelect: () => setDialog({ kind: 'verify', account }),
+      });
+    }
+
+    if (canManage) {
+      actions.push(
+        account.status === 'suspended'
+          ? {
+              key: 'reactivate',
+              label: 'Reactivate',
+              icon: <CheckCircle2 className="h-4 w-4" />,
+              onSelect: () => setStatus.mutate({ id: account._id, next: 'active' }),
+            }
+          : {
+              key: 'suspend',
+              label: 'Suspend',
+              icon: <Ban className="h-4 w-4" />,
+              tone: 'danger',
+              onSelect: () => setDialog({ kind: 'suspend', account }),
+            }
+      );
+    }
+
+    if (canDelete) {
+      actions.push({
+        key: 'delete',
+        label: 'Delete account',
+        icon: <Trash2 className="h-4 w-4" />,
+        tone: 'danger',
+        separated: true,
+        // The API refuses too; saying so here spares typing a reason first.
+        disabled: inOrganizations,
+        hint: inOrganizations ? 'Remove them from their organizations first' : undefined,
+        onSelect: () => setDialog({ kind: 'delete', account }),
+      });
+    }
+
+    return actions;
+  }
+
   function setParam(key: string, value: string) {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
@@ -95,6 +211,7 @@ export function AccountsPage() {
   const filtered = Boolean(urlSearch || status || verification);
   const data = list.data;
   const totalPages = data?.totalPages ?? 1;
+  const target = dialog?.account;
 
   return (
     <div className="space-y-5">
@@ -109,7 +226,11 @@ export function AccountsPage() {
         <StatTile
           label="Registered"
           value={formatNumber(stats.data?.total)}
-          sub={stats.data ? `${formatNumber(stats.data.last30Days)} in the last 30 days` : undefined}
+          sub={
+            stats.data
+              ? `${formatNumber(stats.data.inOrganizations)} in an organization · ${formatNumber(stats.data.last30Days)} in 30 days`
+              : undefined
+          }
           loading={stats.isPending}
         />
         <FilterTile
@@ -208,9 +329,13 @@ export function AccountsPage() {
                 <tr>
                   <Th>Person</Th>
                   <Th>Mobile</Th>
+                  <Th>Organizations</Th>
                   <Th>Email</Th>
                   <Th>Status</Th>
                   <Th>Registered</Th>
+                  <Th className="w-12">
+                    <span className="sr-only">Actions</span>
+                  </Th>
                 </tr>
               </thead>
 
@@ -233,6 +358,9 @@ export function AccountsPage() {
                       <Td className="tabular text-[13px] text-[var(--text-muted)]">
                         {account.phone}
                       </Td>
+                      <Td className="max-w-[220px] text-[13px]">
+                        <OrganizationsCell organizations={account.organizations} />
+                      </Td>
                       <Td>
                         <VerificationChip verifiedAt={account.emailVerifiedAt} />
                       </Td>
@@ -244,6 +372,12 @@ export function AccountsPage() {
                         title={formatDateTime(account.createdAt)}
                       >
                         {formatRelative(account.createdAt)}
+                      </Td>
+                      <Td className="w-12 text-right">
+                        <RowActionsMenu
+                          label={`Actions for ${account.name}`}
+                          actions={actionsFor(account)}
+                        />
                       </Td>
                     </Tr>
                   ))}
@@ -295,7 +429,71 @@ export function AccountsPage() {
           </div>
         )}
       </Card>
+
+      {/* ─── Confirmations ─────────────────────────────────────────────────── */}
+      <AccountActionDialog
+        open={dialog?.kind === 'suspend'}
+        tone="danger"
+        title={`Suspend ${target?.name ?? 'this account'}?`}
+        description="They are signed out of every organization they belong to and cannot sign in until you reactivate them. Nothing is deleted."
+        confirmLabel="Suspend"
+        reasonRequired
+        reasonPlaceholder="Reported for misuse…"
+        loading={setStatus.isPending}
+        onClose={() => setDialog(null)}
+        onConfirm={(reason) => {
+          if (target) setStatus.mutate({ id: target._id, next: 'suspended', reason });
+        }}
+      />
+      <AccountActionDialog
+        open={dialog?.kind === 'verify'}
+        tone="primary"
+        title="Mark this email as verified?"
+        description={`This confirms the details on the account without a code. Only do it once you have established another way that this person owns ${target?.email ?? 'this address'}.`}
+        confirmLabel="Mark verified"
+        reasonRequired
+        reasonPlaceholder="Confirmed on a call with the customer…"
+        loading={verifyEmail.isPending}
+        onClose={() => setDialog(null)}
+        onConfirm={(reason) => {
+          if (target) verifyEmail.mutate({ id: target._id, reason });
+        }}
+      />
+      <AccountActionDialog
+        open={dialog?.kind === 'delete'}
+        tone="danger"
+        title="Delete this account permanently?"
+        description="The account and its details are erased and cannot be recovered. The audit log keeps only the email's domain."
+        confirmLabel="Delete account"
+        reasonRequired
+        reasonPlaceholder="Erasure requested by the account holder…"
+        typeToConfirm={target?.email}
+        loading={deleteAccount.isPending}
+        onClose={() => setDialog(null)}
+        onConfirm={(reason, confirmation) => {
+          if (target) deleteAccount.mutate({ id: target._id, reason, confirmEmail: confirmation });
+        }}
+      />
     </div>
+  );
+}
+
+/** First few organization names, and how many more there are. */
+function OrganizationsCell({
+  organizations,
+}: {
+  organizations?: { count: number; names: string[] };
+}) {
+  if (!organizations || organizations.count === 0) {
+    return <span className="text-[var(--text-subtle)]">None yet</span>;
+  }
+  const hidden = organizations.count - organizations.names.length;
+  const label = organizations.names.join(', ');
+  return (
+    <span className="block truncate text-[var(--text)]" title={label}>
+      {label}
+      {hidden > 0 && <span className="text-[var(--text-muted)]"> +{hidden}</span>}
+    </span>
   );
 }
 

@@ -124,12 +124,18 @@ export const platformService = {
     ownerName: string;
     ownerPhone: string;
     ownerEmail: string;
-    ownerPassword: string;
+    /** Needed only when the owner is new to LeadBee. */
+    ownerPassword?: string;
     plan?: PlanKey;
     status?: OrgStatus;
   }) {
     const { data } = await api.post<
-      ApiSingle<{ organization: Organization; owner: TenantUser }>
+      ApiSingle<{
+        organization: Organization;
+        owner: TenantUser;
+        /** False when the owner already had an account and it was linked. */
+        ownerAccountCreated: boolean;
+      }>
     >('/organizations', payload);
     return data.data;
   },

@@ -34,7 +34,7 @@ import { colors, spacing, borderRadius } from '../../src/theme';
 
 /** Loose on purpose: the API owns the real rule; this only catches typos early. */
 const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
-const MIN_PASSWORD = 6;
+const MIN_PASSWORD = 8;
 const MIN_NAME = 2;
 
 interface FormState {
@@ -101,7 +101,7 @@ export default function TeamMemberFormScreen() {
       setForm((prev) => ({ ...prev, [key]: value }));
 
   const save = useMutation({
-    mutationFn: async (): Promise<'created' | 'saved' | 'unchanged'> => {
+    mutationFn: async (): Promise<'created' | 'linked' | 'saved' | 'unchanged'> => {
       const name = form.name.trim();
       const email = form.email.trim();
       const designation = form.designation.trim();
@@ -117,15 +117,17 @@ export default function TeamMemberFormScreen() {
         return 'saved';
       }
 
-      await userService.create({
+      const created = await userService.create({
         name,
         phone: normalizePhone(form.phone),
-        email: email || undefined,
+        email,
         password: form.password,
         role: form.role,
         designation: designation || undefined,
       });
-      return 'created';
+      // Someone already on LeadBee keeps their own password; say so, or the
+      // admin will share one that does not work.
+      return created.linkedExistingAccount ? 'linked' : 'created';
     },
     onSuccess: (outcome) => {
       if (outcome === 'unchanged') {
@@ -135,7 +137,13 @@ export default function TeamMemberFormScreen() {
       void qc.invalidateQueries({ queryKey: queryKeys.users.all });
       // Seats used, and your own name when you edited yourself, live in the session.
       void reloadSession().catch(() => undefined);
-      Alert.alert(t('common.success'), outcome === 'created' ? t('team.created') : t('team.saved'), [
+      const text =
+        outcome === 'created'
+          ? t('team.created')
+          : outcome === 'linked'
+            ? t('team.linkedExisting')
+            : t('team.saved');
+      Alert.alert(t('common.success'), text, [
         { text: t('common.ok'), onPress: () => router.back() },
       ]);
     },
@@ -149,8 +157,10 @@ export default function TeamMemberFormScreen() {
         ? t('team.nameRequired')
         : !isEdit && !isValidMobilePhone(form.phone)
           ? t('team.phoneInvalid')
-          : email && !EMAIL_PATTERN.test(email)
-            ? t('team.emailInvalid')
+          : !email
+            ? t('team.emailRequired')
+            : !EMAIL_PATTERN.test(email)
+              ? t('team.emailInvalid')
             : !isEdit && form.password.length < MIN_PASSWORD
               ? t('team.passwordTooShort')
               : null;
@@ -225,7 +235,7 @@ export default function TeamMemberFormScreen() {
           />
           {isEdit ? <Text style={styles.hint}>{t('team.phoneLocked')}</Text> : null}
 
-          <FieldLabel>{t('team.email')}</FieldLabel>
+          <FieldLabel required>{t('team.email')}</FieldLabel>
           <TextInput
             {...inputProps}
             value={form.email}

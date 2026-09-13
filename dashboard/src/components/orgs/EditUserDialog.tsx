@@ -82,7 +82,7 @@ export function EditUserDialog({
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!form.name.trim() || !form.phone.trim() || phoneError) return;
+    if (!form.name.trim() || !form.phone.trim() || !form.email.trim() || phoneError) return;
     mutation.mutate();
   }
 
@@ -107,7 +107,10 @@ export function EditUserDialog({
         <div className="border-b border-[var(--border)] px-5 py-4">
           <h2 className="text-[15px] font-semibold text-[var(--text)]">Edit user</h2>
           <p className="mt-0.5 text-[13px] text-[var(--text-muted)]">
-            Password changes revoke the user&apos;s current refresh sessions.
+            Name, phone, email and password belong to this person&apos;s account, so
+            changes apply in every organization they belong to, and a new password
+            ends their sessions everywhere. Role and designation apply to this
+            organization only.
           </p>
         </div>
 
@@ -123,8 +126,8 @@ export function EditUserDialog({
           <Field label="Phone" htmlFor="edit-user-phone" error={phoneError} hint="Validated as a mobile number. Default country: India.">
             <Input id="edit-user-phone" required type="tel" value={form.phone} onChange={(e) => update('phone', e.target.value)} placeholder="+91 9876543210" />
           </Field>
-          <Field label="Email" htmlFor="edit-user-email">
-            <Input id="edit-user-email" type="email" value={form.email} onChange={(e) => update('email', e.target.value)} />
+          <Field label="Email" htmlFor="edit-user-email" hint="Required — the person signs in with it.">
+            <Input id="edit-user-email" required type="email" value={form.email} onChange={(e) => update('email', e.target.value)} />
           </Field>
           <Field label="Designation" htmlFor="edit-user-designation">
             <Input id="edit-user-designation" value={form.designation} onChange={(e) => update('designation', e.target.value)} placeholder="Sales Manager" />
@@ -136,7 +139,7 @@ export function EditUserDialog({
 
         <div className="flex justify-end gap-2 border-t border-[var(--border)] px-5 py-4">
           <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button type="submit" loading={mutation.isPending} disabled={!user || !form.name.trim() || !form.phone.trim() || Boolean(phoneError)}>
+          <Button type="submit" loading={mutation.isPending} disabled={!user || !form.name.trim() || !form.phone.trim() || !form.email.trim() || Boolean(phoneError)}>
             Save changes
           </Button>
         </div>

@@ -3,18 +3,20 @@ import bcrypt from 'bcryptjs';
 import { jsonTransform } from '../lib/toJSON.js';
 
 /**
- * A person who has registered with LeadBee — before, and independent of, any
- * organization.
+ * A person — the one identity they sign in with, whatever organizations they
+ * belong to.
  *
- * **Not tenant-owned, on purpose** (BE-4). A tenant `User` cannot exist without
- * an `organizationId`, and LeadBee registers the person first and asks "join a
- * team or start your own" afterwards. So the identity has to live outside every
- * tenant, the same way `Organization` and `PlatformAdmin` do. It is therefore
- * exempt from ARCH-5's organizationId-leading indexes. See
- * docs/adr/0003-pre-tenant-accounts.md.
+ * **Not tenant-owned, on purpose** (BE-4). A person exists before, and across,
+ * organizations: registered in the app with no team yet, or working for two
+ * companies at once. Each organization they belong to holds a membership
+ * (`User`) that points here. So this collection lives outside every tenant,
+ * like `Organization` and `PlatformAdmin`, and is exempt from ARCH-5's
+ * organizationId-leading indexes.
  *
- * An account never grants access to tenant data by itself. It becomes useful
- * only once it is linked to a tenant `User`, which is the join/create flow.
+ * The account owns the name, email, mobile number and password. Email and
+ * mobile are each unique: one belongs to exactly one person.
+ *
+ * See docs/adr/0003-pre-tenant-accounts.md and docs/adr/0004-account-is-the-identity.md.
  */
 
 export const ACCOUNT_STATUSES = {
@@ -26,6 +28,13 @@ export type AccountStatus = (typeof ACCOUNT_STATUSES)[keyof typeof ACCOUNT_STATU
 
 /** How an email came to be marked verified — an audit question, not a UI one. */
 export type EmailVerifiedVia = 'code' | 'platform_admin';
+
+/**
+ * How the account came to exist. `registration` is the only kind that can be
+ * disposable (see `identity.ts`): an organization or the backfill vouched for
+ * the others.
+ */
+export type AccountSource = 'registration' | 'organization' | 'backfill';
 
 /**
  * The outstanding registration attempt.
@@ -50,6 +59,7 @@ export interface IAccount extends Document {
   phone: string;
   password: string;
   status: AccountStatus;
+  source: AccountSource;
 
   emailVerifiedAt?: Date;
   emailVerifiedVia?: EmailVerifiedVia;
@@ -59,10 +69,11 @@ export interface IAccount extends Document {
   suspendedReason?: string;
   suspendedBy?: mongoose.Types.ObjectId;
 
-  /** Consent record. The form will not submit without it; the server stores when. */
-  acceptedTermsAt: Date;
+  /** Consent record for self-registration. Absent for accounts an organization created. */
+  acceptedTermsAt?: Date;
   signupIp?: string;
   signupUserAgent?: string;
+  lastLoginAt?: Date;
 
   /** Written by platform staff. Never shown to the account holder. */
   internalNotes?: string;
@@ -85,7 +96,9 @@ const pendingVerificationSchema = new Schema<PendingVerification>(
 const accountSchema = new Schema<IAccount>(
   {
     firstName: { type: String, required: true, trim: true, maxlength: 40 },
-    lastName: { type: String, required: true, trim: true, maxlength: 40 },
+    // Not required: a membership name of one word ("Madhuri") has no last name,
+    // and inventing one would be worse than leaving it empty.
+    lastName: { type: String, trim: true, maxlength: 40, default: '' },
     email: {
       type: String,
       required: true,
@@ -94,16 +107,20 @@ const accountSchema = new Schema<IAccount>(
       trim: true,
       maxlength: 254,
     },
-    // Indexed but not unique. Uniqueness would turn registration into an oracle
-    // for "is this number already on LeadBee", and two people sharing a handset
-    // is ordinary. The tenant `User` enforces per-organization uniqueness where
-    // it actually matters: at sign-in.
-    phone: { type: String, required: true, trim: true, index: true },
+    // Unique: a mobile number identifies one person, exactly like an email.
+    // Registration therefore reveals whether a number is taken — a trade-off the
+    // product chose in ADR-0004, bounded by rate limits.
+    phone: { type: String, required: true, trim: true, unique: true },
     password: { type: String, required: true, minlength: 8, select: false },
     status: {
       type: String,
       enum: Object.values(ACCOUNT_STATUSES),
       default: ACCOUNT_STATUSES.ACTIVE,
+    },
+    source: {
+      type: String,
+      enum: ['registration', 'organization', 'backfill'],
+      default: 'registration',
     },
 
     emailVerifiedAt: { type: Date },
@@ -114,9 +131,10 @@ const accountSchema = new Schema<IAccount>(
     suspendedReason: { type: String, trim: true, maxlength: 500 },
     suspendedBy: { type: Schema.Types.ObjectId, ref: 'PlatformAdmin' },
 
-    acceptedTermsAt: { type: Date, required: true },
+    acceptedTermsAt: { type: Date },
     signupIp: { type: String },
     signupUserAgent: { type: String, maxlength: 300 },
+    lastLoginAt: { type: Date },
 
     internalNotes: { type: String, trim: true, maxlength: 5000 },
   },
@@ -131,13 +149,13 @@ accountSchema.index({ emailVerifiedAt: 1, createdAt: -1 });
 
 accountSchema.pre('save', async function () {
   if (!this.isModified('password')) return;
-  // Cost matches the tenant `User`: the same person's credential, the same bar.
+  // Cost 12: this is the credential for every organization the person is in.
   const salt = await bcrypt.genSalt(12);
   this.password = await bcrypt.hash(this.password, salt);
 });
 
 accountSchema.virtual('name').get(function (this: IAccount) {
-  return `${this.firstName} ${this.lastName}`.trim();
+  return `${this.firstName} ${this.lastName ?? ''}`.trim();
 });
 
 accountSchema.set('toJSON', {

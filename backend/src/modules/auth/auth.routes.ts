@@ -19,6 +19,7 @@ import { message, ok } from '../../lib/response.js';
 import { User } from '../../models/User.js';
 import { Project } from '../../models/Project.js';
 import { AppError } from '../../lib/errors.js';
+import { identityService } from '../accounts/identity.service.js';
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   const r = app.withTypeProvider<ZodTypeProvider>();
@@ -26,28 +27,34 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   r.route({
     method: 'POST',
     url: '/login',
-    // Brute-force ceiling, keyed on IP because there is no user yet.
+    // Public by design (BE-11). Brute-force ceiling, keyed on IP because there
+    // is no user yet.
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
     schema: {
       tags: ['auth'],
-      summary: 'Sign in with phone and password',
+      summary: 'Sign in with email or mobile number and password',
       description:
-        'Returns a token pair. If the phone belongs to more than one organization, ' +
-        'responds 409 with `error.details.organizations` — resubmit including ' +
-        '`organizationId`.',
+        'Send `identifier` (email or mobile). Older app builds may send `phone`, ' +
+        'which is still accepted. If the account belongs to more than one ' +
+        'organization, responds 409 with `error.details.organizations` — resubmit ' +
+        'including `organizationId`. 403 `ACCOUNT_SUSPENDED` and `NO_ORGANIZATION` ' +
+        'are returned only after the password has been verified.',
       body: loginBody,
       response: { 200: okEnvelope, ...commonErrors, 409: commonErrors[400] },
     },
     handler: async (request, reply) => {
-      const { phone, password, organizationId } = request.body;
-      const result = await authService.login(phone, password, organizationId);
+      const { identifier, phone, password, organizationId } = request.body;
+      const signInWith = identifier ?? phone;
+      if (!signInWith) throw AppError.badRequest('Enter your email or mobile number');
+
+      const result = await authService.login(signInWith, password, organizationId);
 
       if ('needsOrgSelection' in result) {
         return reply.status(409).send({
           success: false,
           error: {
             code: 'ORGANIZATION_SELECTION_REQUIRED',
-            message: 'This phone number belongs to more than one organization.',
+            message: 'This account belongs to more than one organization.',
             details: { organizations: result.organizations },
           },
           requestId: request.id,
@@ -157,6 +164,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     schema: {
       tags: ['auth'],
       summary: 'Update own profile',
+      description:
+        'Name and email belong to your account and change everywhere you are a ' +
+        'member; a new email must not already be linked to another person. ' +
+        'Designation, avatar and language are per organization.',
       security: [{ tenantToken: [] }],
       body: updateMeBody,
       response: { 200: okEnvelope, ...commonErrors },
@@ -166,11 +177,19 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       // Whitelisted assignment: spreading the body would let a caller set
       // `role`, `permissions` or `isActive` on themselves.
       const { name, email, avatarUrl, designation, locale } = request.body;
+      if (email === '') {
+        throw AppError.badRequest('Email is required — it is how you sign in.');
+      }
+
+      if (name !== undefined || email !== undefined) {
+        await identityService.updateIdentity(auth.user.accountId, { name, email });
+      }
+
+      // Re-read: the identity update rewrote this membership's copy of the name
+      // and email.
       const user = await User.findById(auth.userId);
       if (!user) throw AppError.notFound('User not found');
 
-      if (name !== undefined) user.name = name;
-      if (email !== undefined) user.email = email || undefined;
       if (avatarUrl !== undefined) user.avatarUrl = avatarUrl;
       if (designation !== undefined) user.designation = designation;
       if (locale !== undefined) user.locale = locale;
@@ -187,7 +206,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     config: { rateLimit: { max: 5, timeWindow: '5 minutes' } },
     schema: {
       tags: ['auth'],
-      summary: 'Change own password (revokes every session)',
+      summary: 'Change your password (revokes every session, in every organization)',
       security: [{ tenantToken: [] }],
       body: changePasswordBody,
       response: { 200: messageEnvelope, ...commonErrors },
@@ -243,7 +262,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     preHandler: [app.authenticateTenant],
     schema: {
       tags: ['auth'],
-      summary: 'Sign out of every session on every device',
+      summary: 'Sign out of every session on every device, in every organization',
       security: [{ tenantToken: [] }],
       response: { 200: messageEnvelope, ...commonErrors },
     },

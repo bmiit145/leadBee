@@ -50,14 +50,14 @@ export default function LoginScreen() {
     formState: { errors },
   } = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
-    defaultValues: { phone: '', password: '' },
+    defaultValues: { identifier: '', password: '' },
   });
 
   const attemptLogin = async (data: LoginFormData, organizationId?: string) => {
     try {
       setLoading(true);
       setLoginError(null);
-      await login(data.phone, data.password, organizationId);
+      await login(data.identifier, data.password, organizationId);
       router.replace('/(leads)');
     } catch (error: any) {
       if (error instanceof OrganizationSelectionRequired) {
@@ -118,10 +118,10 @@ export default function LoginScreen() {
 
           <Controller
             control={control}
-            name="phone"
+            name="identifier"
             render={({ field: { onChange, onBlur, value } }) => (
               <TextInput
-                label={t('login.phoneNumber')}
+                label={t('login.identifier')}
                 mode="outlined"
                 value={value}
                 onChangeText={(text) => {
@@ -129,20 +129,25 @@ export default function LoginScreen() {
                   onChange(text);
                 }}
                 onBlur={onBlur}
-                keyboardType="phone-pad"
-                maxLength={15}
-                error={!!errors.phone}
+                // Email keyboard: it has @ and digits, so both kinds of
+                // identifier are typed without switching layouts.
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="username"
+                maxLength={254}
+                error={!!errors.identifier}
                 style={styles.input}
                 contentStyle={styles.inputContent}
                 textColor={colors.inputText}
                 outlineColor={colors.inputBorder}
                 activeOutlineColor={colors.inputBorderFocused}
-                left={<TextInput.Icon icon="phone-outline" color={colors.textSecondary} />}
+                left={<TextInput.Icon icon="account-outline" color={colors.textSecondary} />}
               />
             )}
           />
-          {errors.phone && (
-            <Text style={styles.errorText}>{errors.phone.message}</Text>
+          {errors.identifier && (
+            <Text style={styles.errorText}>{errors.identifier.message}</Text>
           )}
 
           <Controller

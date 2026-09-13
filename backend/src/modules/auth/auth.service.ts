@@ -1,13 +1,18 @@
 import { createHash } from 'node:crypto';
+import bcrypt from 'bcryptjs';
 import { Types } from 'mongoose';
 import { User, type IUser } from '../../models/User.js';
+import { Account, ACCOUNT_STATUSES } from '../../models/Account.js';
 import { Role } from '../../models/Role.js';
 import { Organization, type IOrganization } from '../../models/Organization.js';
 import { AppError } from '../../lib/errors.js';
+import { normalizePhone } from '../../lib/phone.js';
 import { signTokenPair, verifyRefreshToken, type TokenPair } from '../../lib/tokens.js';
 import { runInTenantScope, withoutTenantScope } from '../../lib/tenantContext.js';
+import { identifierKind } from '../accounts/identity.js';
+import { identityService } from '../accounts/identity.service.js';
 
-/** How many concurrent sessions one user may hold. Oldest is evicted past this. */
+/** How many concurrent sessions one membership may hold. Oldest is evicted past this. */
 const MAX_SESSIONS = 5;
 
 /**
@@ -21,13 +26,21 @@ function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
+/**
+ * Compared against when no account matched, so an unknown email costs the same
+ * bcrypt round as a wrong password. Without it, response time alone would say
+ * which identifiers exist. Computed once, on first use.
+ */
+let timingHash: Promise<string> | undefined;
+const timingEqualizer = () => (timingHash ??= bcrypt.hash('leadbee:sign-in-timing', 12));
+
 export interface LoginResult {
   user: IUser;
   organization: IOrganization;
   tokens: TokenPair;
 }
 
-/** One of the organizations a phone number belongs to, offered for selection. */
+/** One of the organizations an account belongs to, offered for selection. */
 export interface OrgChoice {
   _id: string;
   name: string;
@@ -36,41 +49,66 @@ export interface OrgChoice {
 
 export const authService = {
   /**
-   * Phone + password, with the organization inferred where possible.
+   * Email or mobile number, plus the one password the person has.
    *
-   * Phone is unique *per tenant*, not globally — the same person can work for
-   * two customers. So this is one of the few deliberately cross-tenant reads in
-   * the system. Where the phone resolves to exactly one org (the overwhelming
-   * majority) the login screen never has to mention organizations at all.
+   * The account is checked first — it is who the person is — and then the
+   * organization: the only one they belong to, or the one they pick. This is one
+   * of the few deliberately cross-tenant reads in the system, because a
+   * person's memberships live in different tenants. See ADR-0004.
    */
   async login(
-    phone: string,
+    identifier: string,
     password: string,
     organizationId?: string
   ): Promise<LoginResult | { needsOrgSelection: true; organizations: OrgChoice[] }> {
-    const candidates = await withoutTenantScope('login: phone is unique per tenant', () => {
-      const filter: Record<string, unknown> = { phone: phone.trim(), isActive: true };
-      if (organizationId) filter.organizationId = new Types.ObjectId(organizationId);
-      // Both fields are `select: false`. `refreshTokens` is needed because a
-      // successful login stores one — without it the array is undefined and the
-      // push throws *after* the password has already been verified.
-      return User.find(filter).select('+password +refreshTokens').exec();
-    });
+    // One generic failure for "no such account" and "wrong password" alike, so
+    // this endpoint does not become an oracle for which identifiers exist.
+    const invalid = () => AppError.unauthorized('Invalid email, mobile number or password');
 
-    // One generic failure for "no such phone" and "wrong password" alike. Two
-    // distinct messages would turn this endpoint into a phone-number oracle.
-    const invalid = () => AppError.unauthorized('Invalid phone number or password');
-    if (candidates.length === 0) throw invalid();
+    const lookup =
+      identifierKind(identifier) === 'email'
+        ? { email: identifier.trim().toLowerCase() }
+        : { phone: normalizePhone(identifier) };
 
-    const matched: IUser[] = [];
-    for (const candidate of candidates) {
-      if (await candidate.comparePassword(password)) matched.push(candidate);
+    const account = await Account.findOne(lookup).select('+password');
+    if (!account) {
+      await bcrypt.compare(password, await timingEqualizer());
+      throw invalid();
     }
-    if (matched.length === 0) throw invalid();
+    if (!(await bcrypt.compare(password, account.password))) throw invalid();
 
-    if (matched.length > 1) {
+    // After the password, so a suspension is only ever revealed to the owner.
+    if (account.status !== ACCOUNT_STATUSES.ACTIVE) throw AppError.accountSuspended();
+
+    const memberships = await withoutTenantScope(
+      'login: the organizations this account belongs to',
+      // `refreshTokens` is `select: false` and needed: a successful login stores
+      // one, and without it the array is undefined and the push throws *after*
+      // the password has already been verified.
+      () => User.find({ accountId: account._id }).select('+refreshTokens').exec()
+    );
+
+    if (memberships.length === 0) {
+      throw new AppError(
+        'Your account is not part of an organization yet.',
+        403,
+        'NO_ORGANIZATION'
+      );
+    }
+
+    const active = memberships.filter((membership) => membership.isActive);
+    if (active.length === 0) {
+      throw AppError.forbidden('This account has been deactivated in every organization it belongs to.');
+    }
+
+    let user: IUser;
+    if (organizationId) {
+      const chosen = active.find((membership) => membership.organizationId.equals(organizationId));
+      if (!chosen) throw AppError.forbidden('You are not an active member of that organization.');
+      user = chosen;
+    } else if (active.length > 1) {
       const orgs = await withoutTenantScope('login: org selection list', () =>
-        Organization.find({ _id: { $in: matched.map((u) => u.organizationId) } })
+        Organization.find({ _id: { $in: active.map((membership) => membership.organizationId) } })
           .select('name slug')
           .lean()
       );
@@ -82,9 +120,10 @@ export const authService = {
           slug: o.slug,
         })),
       };
+    } else {
+      user = active[0]!;
     }
 
-    const user = matched[0]!;
     const organization = await withoutTenantScope('login: load tenant', () =>
       Organization.findById(user.organizationId).exec()
     );
@@ -99,38 +138,31 @@ export const authService = {
       );
     }
 
-    const tokens = await runInTenantScope(
-      {
-        organizationId: user.organizationId,
-        userId: user._id,
-        role: user.role,
-        permissions: [],
-      },
-      async () => {
-        const permissions = await effectivePermissions(user);
-        const pair = signTokenPair('tenant', {
-          sub: user._id.toString(),
-          org: user.organizationId.toString(),
-          role: user.role,
-          permissions,
-        });
-        await storeRefreshToken(user, pair.refreshToken);
-        return pair;
-      }
-    );
+    const scope = {
+      organizationId: user.organizationId,
+      userId: user._id,
+      role: user.role,
+      permissions: [],
+    };
 
-    user.permissions = await runInTenantScope(
-      {
-        organizationId: user.organizationId,
-        userId: user._id,
+    const tokens = await runInTenantScope(scope, async () => {
+      const permissions = await effectivePermissions(user);
+      const pair = signTokenPair('tenant', {
+        sub: user._id.toString(),
+        org: user.organizationId.toString(),
         role: user.role,
-        permissions: [],
-      },
-      () => effectivePermissions(user)
-    );
+        permissions,
+      });
+      await storeRefreshToken(user, pair.refreshToken);
+      return pair;
+    });
 
-    // Cheap enough to be worth it: the console shows last-seen per user, and a
-    // fire-and-forget write keeps it off the login latency path.
+    user.permissions = await runInTenantScope(scope, () => effectivePermissions(user));
+
+    // Fire-and-forget: last-seen for the console, kept off the login latency path.
+    void Account.updateOne({ _id: account._id }, { $set: { lastLoginAt: new Date() } }).catch(
+      () => undefined
+    );
     void Organization.updateOne(
       { _id: organization._id },
       { $set: { 'usage.lastActivityAt': new Date() } }
@@ -141,7 +173,7 @@ export const authService = {
 
   /**
    * Rotate a refresh token: the presented one is consumed and a fresh pair is
-   * issued. Presenting a token that is not on the user's list means it was
+   * issued. Presenting a token that is not on the membership's list means it was
    * already rotated — i.e. someone is replaying a stolen token — so every
    * session is revoked rather than just this one.
    */
@@ -157,6 +189,13 @@ export const authService = {
     if (!user || !user.isActive) {
       throw AppError.unauthorized('User not found or inactive');
     }
+
+    // A suspended person gets no new tokens, in any organization.
+    const account = await Account.findById(user.accountId)
+      .select('status')
+      .lean<{ status: string }>();
+    if (!account) throw AppError.unauthorized('Account not found');
+    if (account.status !== ACCOUNT_STATUSES.ACTIVE) throw AppError.accountSuspended();
 
     const organization = await withoutTenantScope('refresh: load tenant', () =>
       Organization.findById(user.organizationId).exec()
@@ -214,40 +253,42 @@ export const authService = {
     );
   },
 
-  /** Drop every session — "sign out everywhere", and what a password change does. */
+  /**
+   * "Sign out everywhere" — every session this person holds, in every
+   * organization, because it is one person and one password.
+   */
   async logoutAll(userId: Types.ObjectId): Promise<void> {
-    await User.updateOne(
-      { _id: userId },
-      { $set: { refreshTokens: [] }, $unset: { pushToken: 1 } }
-    );
+    const user = await User.findById(userId).select('accountId');
+    if (!user) return;
+    await identityService.revokeSessions(user.accountId);
+    await User.updateOne({ _id: userId }, { $unset: { pushToken: 1 } });
   },
 
+  /**
+   * Changes the person's one password. Every session in every organization
+   * ends, or the attacker whose access prompted the change keeps theirs.
+   */
   async changePassword(
     userId: Types.ObjectId,
     currentPassword: string,
     newPassword: string
   ): Promise<void> {
-    const user = await User.findById(userId).select('+password +refreshTokens');
+    const user = await User.findById(userId).select('accountId');
     if (!user) throw AppError.notFound('User not found');
 
-    if (!(await user.comparePassword(currentPassword))) {
+    if (!(await identityService.verifyPassword(user.accountId, currentPassword))) {
       throw AppError.unauthorized('Current password is incorrect');
     }
-
-    user.password = newPassword;
-    // Changing a password must end every other session, or the attacker whose
-    // access prompted the change keeps theirs.
-    user.refreshTokens = [];
-    await user.save();
+    await identityService.setPassword(user.accountId, newPassword);
   },
 
   /**
-   * A push token names a device, not a person, so it belongs to one account.
+   * A push token names a device, not a person, so it belongs to one membership.
    *
    * Registering takes it from whoever held it before — in any tenant, because
    * one handset can be signed into different organizations over time. Clearing
    * it on logout is not enough: a session that ends without reaching the server
-   * (revoked by an admin, expired while offline) left the old account holding
+   * (revoked by an admin, expired while offline) left the old membership holding
    * the token, and its lead alerts, contact names included, kept arriving on
    * the next user's phone. Keyed on the token alone, which the caller has just
    * shown it holds.

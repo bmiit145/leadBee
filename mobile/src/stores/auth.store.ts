@@ -33,7 +33,8 @@ interface AuthContextType {
   isOrganizer: boolean;
   viewMode: ViewMode;
   switchViewMode: () => void;
-  login: (phone: string, password: string, organizationId?: string) => Promise<void>;
+  /** `identifier` is an email or a mobile number. */
+  login: (identifier: string, password: string, organizationId?: string) => Promise<void>;
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
   refreshAuth: () => Promise<void>;
@@ -148,11 +149,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const login = useCallback(
-    async (phone: string, password: string, organizationId?: string) => {
+    async (identifier: string, password: string, organizationId?: string) => {
       try {
         setIsLoading(true);
         setOrgInactiveMessage(null);
-        const result = await authService.login(phone, password, organizationId);
+        const result = await authService.login(identifier, password, organizationId);
         setUser(result.user);
         setOrganization(result.organization);
         await storage.setUser(result.user);

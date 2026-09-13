@@ -198,7 +198,7 @@ export const platformService = {
       async () => {
         const [data, total] = await Promise.all([
           User.find()
-            .select('name phone email role designation isActive lastLoginAt createdAt')
+            .select('accountId name phone email role designation isActive lastLoginAt createdAt')
             .sort({ createdAt: -1 })
             .skip(params.skip)
             .limit(params.limit)
