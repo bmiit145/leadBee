@@ -34,6 +34,13 @@ export const swaggerPlugin = fp(async function swaggerPlugin(app: FastifyInstanc
             bearerFormat: 'JWT',
             description: 'Tenant access token from POST /api/v1/auth/login',
           },
+          accountToken: {
+            type: 'http',
+            scheme: 'bearer',
+            bearerFormat: 'JWT',
+            description:
+              'Account token from POST /api/v1/auth/login, issued when the person belongs to no organization',
+          },
           platformToken: {
             type: 'http',
             scheme: 'bearer',

@@ -734,6 +734,93 @@ async function main(): Promise<void> {
   });
   check('The emailed code confirms the address', confirmed.statusCode === 200, confirmed.json());
 
+  // A confirmed person with no organization signs in to an account session —
+  // the "create or join an organization" step — not to a 403.
+  const signInWithoutOrg = await app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/login',
+    headers: registrationHeaders,
+    payload: { identifier: accountEmail, password: registration.password },
+  });
+  const noOrgSession = signInWithoutOrg.json()?.data;
+  check(
+    'A confirmed person with no organization signs in to an account session',
+    signInWithoutOrg.statusCode === 200 &&
+      noOrgSession?.session === 'account' &&
+      noOrgSession?.organization === null &&
+      noOrgSession?.account?.email === accountEmail &&
+      !('password' in (noOrgSession?.account ?? {})) &&
+      !('refreshTokens' in (noOrgSession?.account ?? {})),
+    signInWithoutOrg.json()
+  );
+  const accountSessionAuth = { authorization: `Bearer ${noOrgSession?.accessToken}` };
+
+  const accountMe = await app.inject({
+    method: 'GET',
+    url: '/api/v1/accounts/me',
+    headers: accountSessionAuth,
+  });
+  check(
+    'The account session reads its own account, with no organizations',
+    accountMe.statusCode === 200 && accountMe.json()?.data?.organizationCount === 0,
+    accountMe.json()
+  );
+
+  const accountTokenOnTenant = await app.inject({
+    method: 'GET',
+    url: '/api/v1/leads',
+    headers: accountSessionAuth,
+  });
+  check(
+    'An account token cannot reach tenant routes',
+    accountTokenOnTenant.statusCode === 401,
+    accountTokenOnTenant.statusCode
+  );
+
+  const tenantTokenOnAccount = await app.inject({
+    method: 'GET',
+    url: '/api/v1/accounts/me',
+    headers: ownerAuth,
+  });
+  check(
+    'A tenant token cannot be used as an account session',
+    tenantTokenOnAccount.statusCode === 401,
+    tenantTokenOnAccount.statusCode
+  );
+
+  const refreshAccountSession = (refreshToken: unknown) =>
+    app.inject({
+      method: 'POST',
+      url: '/api/v1/accounts/session/refresh',
+      headers: registrationHeaders,
+      payload: { refreshToken },
+    });
+  const rotatedAccountSession = await refreshAccountSession(noOrgSession?.refreshToken);
+  const rotatedAccountTokens = rotatedAccountSession.json()?.data;
+  check(
+    'An account session refresh rotates the token',
+    rotatedAccountSession.statusCode === 200 &&
+      typeof rotatedAccountTokens?.refreshToken === 'string' &&
+      rotatedAccountTokens.refreshToken !== noOrgSession?.refreshToken,
+    rotatedAccountSession.statusCode
+  );
+
+  const replayedAccountRefresh = await refreshAccountSession(noOrgSession?.refreshToken);
+  const afterReplay = await refreshAccountSession(rotatedAccountTokens?.refreshToken);
+  check(
+    'Replaying a used account refresh token ends every account session',
+    replayedAccountRefresh.statusCode === 401 && afterReplay.statusCode === 401,
+    [replayedAccountRefresh.statusCode, afterReplay.statusCode]
+  );
+
+  const accountLogout = await app.inject({
+    method: 'POST',
+    url: '/api/v1/accounts/logout',
+    headers: accountSessionAuth,
+    payload: {},
+  });
+  check('An account session can sign out', accountLogout.statusCode === 200, accountLogout.statusCode);
+
   // An email and a mobile number each belong to one person (ADR-0004), and
   // registration says so plainly.
   const repeatVerified = await registerAccount(registration);
@@ -788,6 +875,20 @@ async function main(): Promise<void> {
     'Five wrong guesses retire the code, so the right code no longer works',
     afterLockout.statusCode === 400,
     afterLockout.statusCode
+  );
+
+  // The lockout registration never confirmed its email.
+  const unconfirmedSignIn = await app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/login',
+    headers: registrationHeaders,
+    payload: { identifier: lockEmail, password: registration.password },
+  });
+  check(
+    'A registration whose email was never confirmed cannot sign in',
+    unconfirmedSignIn.statusCode === 403 &&
+      unconfirmedSignIn.json()?.error?.code === 'EMAIL_NOT_VERIFIED',
+    unconfirmedSignIn.json()
   );
 
   const resendUnknown = await app.inject({
@@ -891,6 +992,18 @@ async function main(): Promise<void> {
       suspendedData?.activity?.[0]?.action === 'account_suspended' &&
       suspendedData?.activity?.[0]?.reason === 'Smoke test suspension',
     suspendedData
+  );
+
+  const suspendedAccountMe = await app.inject({
+    method: 'GET',
+    url: '/api/v1/accounts/me',
+    headers: accountSessionAuth,
+  });
+  check(
+    'Suspension blocks an account session it already holds',
+    suspendedAccountMe.statusCode === 403 &&
+      suspendedAccountMe.json()?.error?.code === 'ACCOUNT_SUSPENDED',
+    suspendedAccountMe.json()
   );
 
   const suspendAgain = await setAccountStatus({ status: 'suspended', reason: 'Again' });
@@ -1113,6 +1226,114 @@ async function main(): Promise<void> {
     provisionedAccount
   );
 
+  // ─── A registered person creates their own organization ─────────────────────
+  // A fresh registrant, so the earlier account-console checks keep an account
+  // with no memberships.
+  const creatorEmail = `creator-${provisionStamp}@smoke.test`;
+  const creatorRegistration = await registerAccount({
+    ...registration,
+    firstName: 'Creator',
+    email: creatorEmail,
+    phone: `8${(provisionStamp + 7).toString().slice(-9)}`,
+  });
+  const creatorReceipt = creatorRegistration.json()?.data;
+  await verifyAccount({
+    email: creatorEmail,
+    code: creatorReceipt?.devCode,
+    registrationToken: creatorReceipt?.registrationToken,
+  });
+  const creatorSignIn = await app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/login',
+    headers: registrationHeaders,
+    payload: { identifier: creatorEmail, password: registration.password },
+  });
+  const creatorSession = creatorSignIn.json()?.data;
+  const creatorAuth = { authorization: `Bearer ${creatorSession?.accessToken}` };
+  const createOwnOrganization = (payload: Record<string, unknown>) =>
+    app.inject({
+      method: 'POST',
+      url: '/api/v1/accounts/organizations',
+      headers: { ...creatorAuth, ...registrationHeaders },
+      payload,
+    });
+
+  const takenHandle = await createOwnOrganization({
+    organizationName: 'Smoke Taken Handle',
+    slug: provisionNew.json()?.data?.organization?.slug,
+  });
+  check(
+    'Creating an organization with a taken handle is refused',
+    creatorSession?.session === 'account' && takenHandle.statusCode === 409,
+    takenHandle.json()
+  );
+
+  const tenantTokenCreates = await app.inject({
+    method: 'POST',
+    url: '/api/v1/accounts/organizations',
+    headers: ownerAuth,
+    payload: { organizationName: 'Smoke Tenant Token Org' },
+  });
+  check(
+    'A tenant token cannot create an organization from the account route',
+    tenantTokenCreates.statusCode === 401,
+    tenantTokenCreates.statusCode
+  );
+
+  const ownOrganization = await createOwnOrganization({
+    organizationName: `Smoke Own Org ${provisionStamp}`,
+  });
+  const ownOrganizationData = ownOrganization.json()?.data;
+  const createdOrgId = ownOrganizationData?.organization?._id as string | undefined;
+  check(
+    'A person with no organization creates one, owns it, and is signed into it',
+    ownOrganization.statusCode === 201 &&
+      ownOrganizationData?.session === 'tenant' &&
+      ownOrganizationData?.user?.role === 'owner' &&
+      ownOrganizationData?.user?.email === creatorEmail,
+    ownOrganization.json()
+  );
+
+  const createdOrgMe = await app.inject({
+    method: 'GET',
+    url: '/api/v1/auth/me',
+    headers: { authorization: `Bearer ${ownOrganizationData?.accessToken}` },
+  });
+  check(
+    'The returned tenant session opens the new organization',
+    createdOrgMe.statusCode === 200 && createdOrgMe.json()?.data?.organization?._id === createdOrgId,
+    createdOrgMe.statusCode
+  );
+
+  const staleAccountRefresh = await app.inject({
+    method: 'POST',
+    url: '/api/v1/accounts/session/refresh',
+    headers: registrationHeaders,
+    payload: { refreshToken: creatorSession?.refreshToken },
+  });
+  const secondOwnOrganization = await createOwnOrganization({
+    organizationName: `Smoke Second Org ${provisionStamp}`,
+  });
+  check(
+    'Creating an organization ends the account session, and a second create is refused',
+    staleAccountRefresh.statusCode === 401 && secondOwnOrganization.statusCode === 409,
+    [staleAccountRefresh.statusCode, secondOwnOrganization.statusCode]
+  );
+
+  const creatorLogin = await app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/login',
+    headers: registrationHeaders,
+    payload: { identifier: creatorEmail, password: registration.password },
+  });
+  check(
+    'Signing in afterwards opens the organization, not the no-organization step',
+    creatorLogin.statusCode === 200 &&
+      creatorLogin.json()?.data?.session === 'tenant' &&
+      creatorLogin.json()?.data?.organization?._id === createdOrgId,
+    creatorLogin.json()
+  );
+
   // An existing person: linked, not duplicated, and no password needed.
   const provisionLinked = await provisionOrg({
     organizationName: `Smoke Linked ${provisionStamp}`,
@@ -1257,11 +1478,13 @@ async function main(): Promise<void> {
     // Normally already erased through the console; this catches a run that
     // failed part-way.
     await Account.deleteMany({
-      email: { $in: [accountEmail, lockEmail, tenantBOwnerEmail, provisionedOwnerEmail] },
+      email: {
+        $in: [accountEmail, lockEmail, tenantBOwnerEmail, provisionedOwnerEmail, creatorEmail],
+      },
     });
     // The provisioned organizations. The linked one's owner is the seeded
     // manager, whose account stays — only that extra membership goes.
-    for (const organizationId of [provisionedOrgId, linkedOrgId]) {
+    for (const organizationId of [provisionedOrgId, linkedOrgId, createdOrgId]) {
       if (!organizationId) continue;
       await Lead.deleteMany({ organizationId });
       await User.deleteMany({ organizationId });

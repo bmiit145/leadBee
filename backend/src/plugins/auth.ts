@@ -14,11 +14,12 @@ import {
 } from '../lib/tenantContext.js';
 import {
   verifyAccessToken,
+  type AccountTokenPayload,
   type PlatformTokenPayload,
   type TenantTokenPayload,
 } from '../lib/tokens.js';
 import { ORGANIZER_ROLES, PERMISSIONS } from '../config/constants.js';
-import type { PlatformAuth, TenantAuth } from '../types/fastify.js';
+import type { AccountAuth, PlatformAuth, TenantAuth } from '../types/fastify.js';
 
 export const authPlugin = fp(async function authPlugin(app: FastifyInstance) {
   /**
@@ -118,6 +119,36 @@ export const authPlugin = fp(async function authPlugin(app: FastifyInstance) {
         orgId: organizationId.toString(),
         userId: userId.toString(),
       });
+    }
+  );
+
+  // ─── Account realm ──────────────────────────────────────────────────────────
+  // A person signed in with no organization. The tenant-scope container stays
+  // empty on purpose: nothing reachable from this realm is tenant-owned, so a
+  // route that tried to read tenant data would fail closed (ARCH-3).
+  app.decorate(
+    'authenticateAccount',
+    async function authenticateAccount(request: FastifyRequest): Promise<void> {
+      const token = bearerToken(request);
+      const payload = verifyAccessToken<AccountTokenPayload>('account', token);
+
+      if (!Types.ObjectId.isValid(payload.sub)) {
+        throw AppError.unauthorized('Malformed token subject');
+      }
+
+      // Status checked on every request, as on tenant routes (ARCH-9).
+      const account = await Account.findById(payload.sub);
+      if (!account) throw AppError.unauthorized('Account not found');
+      if (account.status !== 'active') throw AppError.accountSuspended();
+
+      const accountAuth: AccountAuth = {
+        realm: 'account',
+        account,
+        accountId: account._id,
+      };
+      request.accountAuth = accountAuth;
+
+      bindToLog(request, { accountId: account._id.toString() });
     }
   );
 

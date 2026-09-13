@@ -328,14 +328,16 @@ registers in the app, confirms their email, and appears in the console under
 
 ### [ ] 6.2 A registered person cannot join or create an organization yet — P0 for the feature
 
-- **What.** Sign-in is now by account ([ADR-0004](./adr/0004-account-is-the-identity.md))
-  and enforces suspension, but a person with no membership gets 403
-  `NO_ORGANIZATION`. The "join a team or create your own" step does not exist.
-- **Fix.** *Create* (provision an organization with the signed-in account as
-  owner — `organizationService.provision` already links an existing account)
-  and *join* (invite code, email domain, or request-and-approve), each creating
-  a membership through `memberService.addMember`. Sign-in needs an
-  account-level session to reach those screens without a tenant token.
+- **What.** A person with no membership now signs in to an account session
+  ([ADR-0004](./adr/0004-account-is-the-identity.md)) and lands on the
+  "not part of an organization yet" screen
+  ([no-organization.tsx](../mobile/app/no-organization.tsx)). **Create your own
+  organization** works (`POST /accounts/organizations`, 2026-09-13): it
+  provisions with the signed-in account as owner and switches the app into the
+  new organization. **Join an organization** does nothing yet.
+- **Fix.** *Join* (invite code, email domain, or request-and-approve), creating
+  a membership through `memberService.addMember`, as an account-realm route
+  (`authenticateAccount`) that answers with a tenant session like create does.
 - **Done when.** A newly registered person can reach a working organization.
 
 ### [ ] 6.3 Registration limits are per instance — P1

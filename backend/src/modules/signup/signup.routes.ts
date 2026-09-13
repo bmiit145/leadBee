@@ -72,8 +72,8 @@ export async function signupRoutes(app: FastifyInstance): Promise<void> {
         body.password,
         organization._id.toString()
       );
-      if ('needsOrgSelection' in result) {
-        // Unreachable: the org was just created and passed explicitly.
+      if ('needsOrgSelection' in result || 'accountSession' in result) {
+        // Unreachable: the org was just created with this owner and passed explicitly.
         throw AppError.internal('Unexpected organization ambiguity after signup');
       }
 

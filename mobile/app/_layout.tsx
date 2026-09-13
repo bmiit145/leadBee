@@ -39,6 +39,7 @@ function RootLayoutContent() {
   const {
     isInitialized,
     isAuthenticated,
+    isAccountSession,
     serverStatus,
     isCheckingServer,
     checkServerHealth,
@@ -129,17 +130,20 @@ function RootLayoutContent() {
   }, [runBackgroundOtaCheck]);
 
   // ─── Routing ───────────────────────────────────────────────────────────────
-  // The lead workspace is the whole product, so there is one destination.
+  // A member lands in the lead workspace. Someone signed in who belongs to no
+  // organization lands on the step that gets them into one.
   useEffect(() => {
     if (!isInitialized) return;
     if (serverStatus !== 'healthy') return;
 
     if (isAuthenticated) {
       router.replace('/(leads)');
+    } else if (isAccountSession) {
+      router.replace('/no-organization');
     } else {
       router.replace('/(auth)/login');
     }
-  }, [isInitialized, isAuthenticated, router, serverStatus]);
+  }, [isInitialized, isAuthenticated, isAccountSession, router, serverStatus]);
 
   // ─── Push ──────────────────────────────────────────────────────────────────
   // Registered once per signed-in session. A push that lands while the app is
@@ -220,6 +224,7 @@ function RootLayoutContent() {
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(auth)" options={{ headerShown: false, animation: 'none' }} />
         <Stack.Screen name="(leads)" options={{ headerShown: false, animation: 'none' }} />
+        <Stack.Screen name="no-organization" options={{ headerShown: false, animation: 'fade' }} />
       </Stack>
 
       {/*

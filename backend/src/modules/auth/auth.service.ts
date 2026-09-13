@@ -11,6 +11,7 @@ import { signTokenPair, verifyRefreshToken, type TokenPair } from '../../lib/tok
 import { runInTenantScope, withoutTenantScope } from '../../lib/tenantContext.js';
 import { identifierKind } from '../accounts/identity.js';
 import { identityService } from '../accounts/identity.service.js';
+import { accountSessionService, type AccountSession } from '../accounts/accountSession.service.js';
 
 /** How many concurrent sessions one membership may hold. Oldest is evicted past this. */
 const MAX_SESSIONS = 5;
@@ -60,7 +61,11 @@ export const authService = {
     identifier: string,
     password: string,
     organizationId?: string
-  ): Promise<LoginResult | { needsOrgSelection: true; organizations: OrgChoice[] }> {
+  ): Promise<
+    | LoginResult
+    | { needsOrgSelection: true; organizations: OrgChoice[] }
+    | { accountSession: AccountSession }
+  > {
     // One generic failure for "no such account" and "wrong password" alike, so
     // this endpoint does not become an oracle for which identifiers exist.
     const invalid = () => AppError.unauthorized('Invalid email, mobile number or password');
@@ -89,11 +94,19 @@ export const authService = {
     );
 
     if (memberships.length === 0) {
-      throw new AppError(
-        'Your account is not part of an organization yet.',
-        403,
-        'NO_ORGANIZATION'
-      );
+      // A self-registered email nobody confirmed reserves nothing (identity.ts)
+      // — a newer registration may replace it — so it cannot hold a session.
+      // Registering again with the same details sends a fresh code.
+      if (account.source === 'registration' && !account.emailVerifiedAt) {
+        throw new AppError(
+          'Confirm your email before signing in. Register again with the same details to get a new code.',
+          403,
+          'EMAIL_NOT_VERIFIED'
+        );
+      }
+      // Not an error: a person who has not joined or created an organization
+      // yet signs in to exactly that step. See accountSession.service.ts.
+      return { accountSession: await accountSessionService.start(account) };
     }
 
     const active = memberships.filter((membership) => membership.isActive);
@@ -138,6 +151,23 @@ export const authService = {
       );
     }
 
+    // Fire-and-forget: last-seen for the console, kept off the login latency path.
+    void Account.updateOne({ _id: account._id }, { $set: { lastLoginAt: new Date() } }).catch(
+      () => undefined
+    );
+
+    return authService.openMembershipSession(user, organization);
+  },
+
+  /**
+   * Issues tenant tokens for one membership.
+   *
+   * The caller has already established who the person is and that the
+   * membership and its organization are usable — sign-in by password, or an
+   * account session that has just created the organization. `user` must be
+   * loaded with `+refreshTokens`.
+   */
+  async openMembershipSession(user: IUser, organization: IOrganization): Promise<LoginResult> {
     const scope = {
       organizationId: user.organizationId,
       userId: user._id,
@@ -159,10 +189,6 @@ export const authService = {
 
     user.permissions = await runInTenantScope(scope, () => effectivePermissions(user));
 
-    // Fire-and-forget: last-seen for the console, kept off the login latency path.
-    void Account.updateOne({ _id: account._id }, { $set: { lastLoginAt: new Date() } }).catch(
-      () => undefined
-    );
     void Organization.updateOne(
       { _id: organization._id },
       { $set: { 'usage.lastActivityAt': new Date() } }

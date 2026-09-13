@@ -279,4 +279,7 @@ export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
 export const TOKEN_AUDIENCE = {
   TENANT: 'leadbee:tenant',
   PLATFORM: 'leadbee:platform',
+  // A signed-in person with no organization yet (ADR-0004). It can reach only
+  // their own account — never a tenant route, never the control plane.
+  ACCOUNT: 'leadbee:account',
 } as const;

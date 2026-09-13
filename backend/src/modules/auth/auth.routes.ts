@@ -35,10 +35,14 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       summary: 'Sign in with email or mobile number and password',
       description:
         'Send `identifier` (email or mobile). Older app builds may send `phone`, ' +
-        'which is still accepted. If the account belongs to more than one ' +
-        'organization, responds 409 with `error.details.organizations` — resubmit ' +
-        'including `organizationId`. 403 `ACCOUNT_SUSPENDED` and `NO_ORGANIZATION` ' +
-        'are returned only after the password has been verified.',
+        'which is still accepted. `data.session` says what was issued: `tenant` ' +
+        '(user, organization and tenant tokens) or `account` (the person belongs ' +
+        'to no organization yet — `account`, `organization: null` and account-realm ' +
+        'tokens, refreshed at `/accounts/session/refresh`). If the account belongs ' +
+        'to more than one organization, responds 409 with ' +
+        '`error.details.organizations` — resubmit including `organizationId`. 403 ' +
+        '`ACCOUNT_SUSPENDED` and `EMAIL_NOT_VERIFIED` are returned only after the ' +
+        'password has been verified.',
       body: loginBody,
       response: { 200: okEnvelope, ...commonErrors, 409: commonErrors[400] },
     },
@@ -61,8 +65,22 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
+      if ('accountSession' in result) {
+        const { account, tokens } = result.accountSession;
+        return reply.send(
+          ok({
+            session: 'account',
+            account: account.toJSON(),
+            organization: null,
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+          })
+        );
+      }
+
       return reply.send(
         ok({
+          session: 'tenant',
           user: result.user.toJSON(),
           organization: result.organization.toJSON(),
           accessToken: result.tokens.accessToken,

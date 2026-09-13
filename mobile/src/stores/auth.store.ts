@@ -1,8 +1,9 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { User } from '../types';
+import { Account, User } from '../types';
 import { authService } from '../services/auth.service';
-import { storage } from '../utils/storage';
+import { onboardingService } from '../services/onboarding.service';
+import { storage, type SessionKind } from '../utils/storage';
 import { systemService, ServerStatus } from '../services/system.service';
 import { setForcedLogoutCallback, setOrgInactiveCallback } from '../services/api';
 import { Organization } from '../types';
@@ -17,14 +18,25 @@ const getEffectivePermissions = (user: User | null): string[] => {
   return Array.from(new Set([...directPermissions, ...rolePermissions]));
 };
 
+/** A refusal that ends a session, as opposed to the network having a bad moment. */
+const isDefinitive = (status?: number) => status === 400 || status === 401 || status === 403;
+
 interface AuthContextType {
   user: User | null;
   /** The tenant this session belongs to. Null before sign-in. */
   organization: Organization | null;
+  /**
+   * The signed-in person, when they belong to no organization yet. Null on a
+   * membership session — `user` carries the person there.
+   */
+  account: Account | null;
+  /** Signed in, but not a member of any organization: the "create or join" step. */
+  isAccountSession: boolean;
   /** Set when the API reports the tenant is suspended or its trial lapsed.
    *  Distinct from a sign-in failure — the credentials are fine. */
   orgInactiveMessage: string | null;
   clearOrgInactive: () => void;
+  /** A membership session. False on an account session. */
   isAuthenticated: boolean;
   isLoading: boolean;
   isInitialized: boolean;
@@ -33,12 +45,26 @@ interface AuthContextType {
   isOrganizer: boolean;
   viewMode: ViewMode;
   switchViewMode: () => void;
-  /** `identifier` is an email or a mobile number. */
-  login: (identifier: string, password: string, organizationId?: string) => Promise<void>;
+  /**
+   * `identifier` is an email or a mobile number. Resolves to the kind of
+   * session opened, so the caller can route to the workspace or to the
+   * no-organization screen.
+   */
+  login: (identifier: string, password: string, organizationId?: string) => Promise<SessionKind>;
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
   refreshAuth: () => Promise<void>;
   reloadSession: () => Promise<void>;
+  /**
+   * Re-reads an account session. Resolves to how many organizations the person
+   * now belongs to — above zero means someone added them since they signed in.
+   */
+  reloadAccount: () => Promise<number>;
+  /**
+   * On an account session: creates an organization owned by the signed-in
+   * person and switches to it. Afterwards `isAuthenticated` is true.
+   */
+  createOrganization: (details: { organizationName: string; slug?: string }) => Promise<void>;
   checkServerHealth: () => Promise<ServerStatus>;
   hasPermission: (permission: string) => boolean;
   hasAnyPermission: (permissions: string[]) => boolean;
@@ -49,6 +75,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
+  const [account, setAccount] = useState<Account | null>(null);
   const [orgInactiveMessage, setOrgInactiveMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
@@ -62,6 +89,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     AsyncStorage.getItem(VIEW_MODE_KEY).then(val => {
       if (val === 'agent' || val === 'admin') setViewMode(val);
     });
+  }, []);
+
+  const clearSessionState = useCallback(() => {
+    setUser(null);
+    setOrganization(null);
+    setAccount(null);
   }, []);
 
   const checkServerHealth = useCallback(async () => {
@@ -78,10 +111,42 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
+  /** Restores a stored account session, refreshing once if the access token is refused. */
+  const restoreAccountSession = useCallback(async () => {
+    try {
+      setAccount((await authService.getAccountMe()).account);
+    } catch (error: any) {
+      if (!isDefinitive(error.response?.status)) {
+        // Nothing cached to show, so this lands on sign-in; the stored tokens
+        // are kept and the next launch tries again.
+        console.warn('⚠️ Server unreachable, account session not restored');
+        return;
+      }
+      try {
+        await authService.refresh();
+        setAccount((await authService.getAccountMe()).account);
+      } catch (refreshError: any) {
+        if (isDefinitive(refreshError?.response?.status)) {
+          setAccount(null);
+          await storage.clearTokens();
+        }
+      }
+    }
+  }, []);
+
   const checkAuth = useCallback(async () => {
     try {
-      const [token, cachedUser] = await Promise.all([storage.getAccessToken(), storage.getUser()]);
-      if (!token) { setUser(null); return; }
+      const [token, cachedUser, kind] = await Promise.all([
+        storage.getAccessToken(),
+        storage.getUser(),
+        storage.getSessionKind(),
+      ]);
+      if (!token) { clearSessionState(); return; }
+
+      if (kind === 'account') {
+        await restoreAccountSession();
+        return;
+      }
 
       if (cachedUser) setUser(cachedUser);
 
@@ -92,7 +157,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await storage.setUser(session.user);
       } catch (error: any) {
         const status = error.response?.status;
-        if (status === 401 || status === 403 || status === 400) {
+        if (isDefinitive(status)) {
           try {
             await authService.refresh();
             const session = await authService.getMe();
@@ -100,8 +165,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setOrganization(session.organization);
             await storage.setUser(session.user);
           } catch (refreshError: any) {
-            const refreshStatus = refreshError?.response?.status;
-            if (refreshStatus === 400 || refreshStatus === 401 || refreshStatus === 403) {
+            if (isDefinitive(refreshError?.response?.status)) {
               setUser(null); setOrganization(null);
               await storage.clearTokens();
             }
@@ -115,22 +179,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {
       console.error('❌ Auth initialization error');
     }
-  }, []);
+  }, [clearSessionState, restoreAccountSession]);
 
   const refreshAuth = useCallback(async () => {
     try {
       setIsLoading(true);
       await authService.refresh();
+      if ((await storage.getSessionKind()) === 'account') {
+        setAccount((await authService.getAccountMe()).account);
+        return;
+      }
       const session = await authService.getMe();
       setUser(session.user);
       setOrganization(session.organization);
     } catch {
-      setUser(null); setOrganization(null);
+      clearSessionState();
       await storage.clearTokens();
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [clearSessionState]);
 
   /**
    * Re-reads the session from `/auth/me` without rotating tokens.
@@ -148,23 +216,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await storage.setUser(session.user);
   }, []);
 
+  const reloadAccount = useCallback(async () => {
+    const me = await authService.getAccountMe();
+    setAccount(me.account);
+    return me.organizationCount;
+  }, []);
+
+  const createOrganization = useCallback(
+    async (details: { organizationName: string; slug?: string }) => {
+      const session = await onboardingService.createOrganization(details);
+      setAccount(null);
+      setUser(session.user);
+      setOrganization(session.organization);
+      await storage.setUser(session.user);
+    },
+    []
+  );
+
   const login = useCallback(
     async (identifier: string, password: string, organizationId?: string) => {
       try {
         setIsLoading(true);
         setOrgInactiveMessage(null);
         const result = await authService.login(identifier, password, organizationId);
-        setUser(result.user);
-        setOrganization(result.organization);
-        await storage.setUser(result.user);
+        if (result.session === 'account') {
+          setUser(null);
+          setOrganization(null);
+          setAccount(result.account);
+          await storage.setUser(null);
+        } else {
+          setAccount(null);
+          setUser(result.user);
+          setOrganization(result.organization);
+          await storage.setUser(result.user);
+        }
+        return result.session;
       } catch (error) {
-        setUser(null); setOrganization(null);
+        clearSessionState();
         throw error;
       } finally {
         setIsLoading(false);
       }
     },
-    []
+    [clearSessionState]
   );
 
   const logout = useCallback(async () => {
@@ -174,19 +268,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {
       // Ignored: the local session is cleared regardless.
     } finally {
-      setUser(null); setOrganization(null);
+      clearSessionState();
       setOrgInactiveMessage(null);
       await storage.clearTokens();
       setIsLoading(false);
     }
-  }, []);
+  }, [clearSessionState]);
 
   const clearOrgInactive = useCallback(() => setOrgInactiveMessage(null), []);
 
   // Bridge the Axios interceptors into React state.
   useEffect(() => {
     setForcedLogoutCallback(async () => {
-      setUser(null); setOrganization(null);
+      clearSessionState();
       await storage.clearTokens();
     });
 
@@ -197,7 +291,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setOrgInactiveCallback((message: string) => {
       setOrgInactiveMessage(message);
     });
-  }, []);
+  }, [clearSessionState]);
 
   // Initialize auth on app startup (once)
   useEffect(() => {
@@ -264,6 +358,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const value: AuthContextType = {
     user: safeUser,
     organization,
+    account,
+    isAccountSession: !safeUser && !!account,
     orgInactiveMessage,
     clearOrgInactive,
     isAuthenticated: !!safeUser,
@@ -279,6 +375,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     checkAuth,
     refreshAuth,
     reloadSession,
+    reloadAccount,
+    createOrganization,
     checkServerHealth,
     hasPermission,
     hasAnyPermission,

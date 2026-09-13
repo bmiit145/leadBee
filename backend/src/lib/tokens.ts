@@ -1,3 +1,4 @@
+import { createHmac, randomUUID } from 'node:crypto';
 import jwt, { type SignOptions } from 'jsonwebtoken';
 import { env } from '../config/env.js';
 import { TOKEN_AUDIENCE } from '../config/constants.js';
@@ -28,6 +29,22 @@ export interface PlatformTokenPayload {
   permissions: string[];
 }
 
+/** Carries no organization, role or permission: an account session has none. */
+export interface AccountTokenPayload {
+  sub: string; // account id
+}
+
+/**
+ * The account realm's keys, derived from the tenant secrets with a label.
+ *
+ * A distinct secret *and* a distinct audience, like the other two realms
+ * (ARCH-7), without a second pair of variables every environment must set.
+ * Derived rather than reused, so a tenant token can never verify here even if
+ * the audience check were dropped.
+ */
+const deriveSecret = (secret: string, label: string): string =>
+  createHmac('sha256', secret).update(`leadbee:${label}:v1`).digest('hex');
+
 export interface TokenPair {
   accessToken: string;
   refreshToken: string;
@@ -56,13 +73,20 @@ const REALMS = {
     refreshTtl: env.PLATFORM_JWT_REFRESH_EXPIRES_IN,
     audience: TOKEN_AUDIENCE.PLATFORM,
   },
+  account: {
+    accessSecret: deriveSecret(env.JWT_SECRET, 'account-access'),
+    refreshSecret: deriveSecret(env.JWT_REFRESH_SECRET, 'account-refresh'),
+    accessTtl: env.JWT_EXPIRES_IN,
+    refreshTtl: env.JWT_REFRESH_EXPIRES_IN,
+    audience: TOKEN_AUDIENCE.ACCOUNT,
+  },
 } satisfies Record<string, RealmConfig>;
 
 export type Realm = keyof typeof REALMS;
 
 export function signTokenPair(
   realm: Realm,
-  payload: TenantTokenPayload | PlatformTokenPayload
+  payload: TenantTokenPayload | PlatformTokenPayload | AccountTokenPayload
 ): TokenPair {
   const cfg = REALMS[realm];
   const common: SignOptions = { issuer: ISSUER, audience: cfg.audience };
@@ -71,18 +95,26 @@ export function signTokenPair(
     accessToken: jwt.sign(payload, cfg.accessSecret, {
       ...common,
       expiresIn: cfg.accessTtl as SignOptions['expiresIn'],
+      jwtid: randomUUID(),
     }),
     // The refresh token carries only the subject. If it leaks, it cannot be read
     // for the bearer's role or permission set, and it is useless without also
     // matching a stored hash on the user row.
+    //
+    // `jwtid` makes every token unique. Without it, two issued for one subject
+    // within the same second are byte-identical — so a rotation could hand back
+    // the very token it consumed, and replaying that token would go unnoticed.
     refreshToken: jwt.sign({ sub: payload.sub }, cfg.refreshSecret, {
       ...common,
       expiresIn: cfg.refreshTtl as SignOptions['expiresIn'],
+      jwtid: randomUUID(),
     }),
   };
 }
 
-export function verifyAccessToken<T extends TenantTokenPayload | PlatformTokenPayload>(
+export function verifyAccessToken<
+  T extends TenantTokenPayload | PlatformTokenPayload | AccountTokenPayload,
+>(
   realm: Realm,
   token: string
 ): T {

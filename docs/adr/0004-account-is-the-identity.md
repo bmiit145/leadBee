@@ -64,8 +64,19 @@ holds its identifiers exclusively.
 1. Find the account by email or normalised mobile; compare the password (a
    dummy bcrypt comparison runs when no account matched, so timing does not
    reveal which identifiers exist).
-2. Suspended → 403 `ACCOUNT_SUSPENDED`. No memberships → 403 `NO_ORGANIZATION`.
-   Both only after the password is verified.
+2. Suspended → 403 `ACCOUNT_SUSPENDED`, only after the password is verified.
+   No memberships → an **account session** (`data.session: "account"`,
+   `organization: null`), so a person who registered signs in to the "create or
+   join an organization" step instead of being refused. Its tokens are a third
+   realm (ARCH-7): audience `leadbee:account`, keys derived from the tenant
+   secrets with a label. They reach only `GET /accounts/me`,
+   `POST /accounts/session/refresh` and `POST /accounts/logout`; tenant routes
+   refuse them, and those routes refuse tenant tokens. Refresh hashes live on
+   `Account.refreshTokens` with the same rotation and replay rules as a
+   membership, and suspension, a password change and sign-out-everywhere clear
+   them. A self-registered account whose email was never confirmed gets 403
+   `EMAIL_NOT_VERIFIED` instead — it reserves nothing, so it holds no session.
+   (Added 2026-09-13; this replaced 403 `NO_ORGANIZATION`.)
 3. One active membership → tokens for it. Several → the existing
    `ORGANIZATION_SELECTION_REQUIRED` picker.
 4. The request's `phone` field is still accepted, for app builds already

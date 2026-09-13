@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
-import { storage } from '../utils/storage';
+import { storage, type SessionKind } from '../utils/storage';
 
 /**
  * The LeadBee API client.
@@ -58,6 +58,16 @@ const resolveApiBaseUrl = (): string => {
 };
 
 export const API_BASE_URL = resolveApiBaseUrl();
+
+/**
+ * Where a session refreshes and signs out. A membership session and an account
+ * session (signed in, no organization yet) are different token realms on the
+ * API, and each refuses the other's tokens.
+ */
+export const sessionPaths = (kind: SessionKind) =>
+  kind === 'account'
+    ? { refresh: '/accounts/session/refresh', logout: '/accounts/logout' }
+    : { refresh: '/auth/refresh', logout: '/auth/logout' };
 
 const SENSITIVE_KEYS = new Set([
   'password',
@@ -185,7 +195,8 @@ api.interceptors.response.use(
         const refreshToken = await storage.getRefreshToken();
         if (!refreshToken) throw new Error('No refresh token');
 
-        const { data } = await refreshApi.post('/auth/refresh', { refreshToken });
+        const { refresh } = sessionPaths(await storage.getSessionKind());
+        const { data } = await refreshApi.post(refresh, { refreshToken });
         const { accessToken, refreshToken: newRefreshToken } = data.data;
         await storage.setTokens(accessToken, newRefreshToken);
 

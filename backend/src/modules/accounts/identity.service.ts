@@ -289,11 +289,13 @@ export const identityService = {
     await identityService.revokeSessions(accountId);
   },
 
+  /** Every session: each membership's, and the account session held with none. */
   async revokeSessions(accountId: Types.ObjectId): Promise<void> {
     await withoutTenantScope(
       'identity: end this person’s sessions in every organization',
       () => User.updateMany({ accountId }, { $set: { refreshTokens: [] } }).exec()
     );
+    await Account.updateOne({ _id: accountId }, { $set: { refreshTokens: [] } });
   },
 };
 

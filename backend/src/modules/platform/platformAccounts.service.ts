@@ -304,6 +304,9 @@ export const platformAccountsService = {
             suspendedAt: new Date(),
             suspendedReason: trimmedReason,
             suspendedBy: admin._id,
+            // The session held with no organization ends here; membership
+            // sessions end below.
+            refreshTokens: [],
           },
           $unset: { verification: 1 },
         }

@@ -75,6 +75,12 @@ export interface IAccount extends Document {
   signupUserAgent?: string;
   lastLoginAt?: Date;
 
+  /**
+   * Hashes of account-session refresh tokens — the session a person holds while
+   * they belong to no organization. Membership sessions live on `User`.
+   */
+  refreshTokens: string[];
+
   /** Written by platform staff. Never shown to the account holder. */
   internalNotes?: string;
 
@@ -135,6 +141,7 @@ const accountSchema = new Schema<IAccount>(
     signupIp: { type: String },
     signupUserAgent: { type: String, maxlength: 300 },
     lastLoginAt: { type: Date },
+    refreshTokens: { type: [String], default: [], select: false },
 
     internalNotes: { type: String, trim: true, maxlength: 5000 },
   },
@@ -160,7 +167,7 @@ accountSchema.virtual('name').get(function (this: IAccount) {
 
 accountSchema.set('toJSON', {
   virtuals: true,
-  transform: jsonTransform('password', 'verification'),
+  transform: jsonTransform('password', 'verification', 'refreshTokens'),
 });
 
 export const Account: Model<IAccount> = mongoose.model<IAccount>('Account', accountSchema);

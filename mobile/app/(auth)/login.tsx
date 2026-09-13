@@ -57,8 +57,9 @@ export default function LoginScreen() {
     try {
       setLoading(true);
       setLoginError(null);
-      await login(data.identifier, data.password, organizationId);
-      router.replace('/(leads)');
+      const session = await login(data.identifier, data.password, organizationId);
+      // No organization yet is a destination, not a failure.
+      router.replace(session === 'account' ? '/no-organization' : '/(leads)');
     } catch (error: any) {
       if (error instanceof OrganizationSelectionRequired) {
         setPendingCredentials(data);

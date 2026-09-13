@@ -76,6 +76,20 @@ export interface User {
   updatedAt: string;
 }
 
+/**
+ * The person — one per human, whatever organizations they belong to. The app
+ * holds this alone while they belong to none.
+ */
+export interface Account {
+  _id: string;
+  firstName: string;
+  lastName: string;
+  name: string;
+  email: string;
+  phone: string;
+  emailVerifiedAt?: string;
+}
+
 export interface AuthTokens {
   accessToken: string;
   refreshToken: string;

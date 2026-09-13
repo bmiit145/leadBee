@@ -1,18 +1,42 @@
-import api, { apiErrorCode } from './api';
-import { storage } from '../utils/storage';
-import { User, ApiResponse, AuthTokens, Organization } from '../types';
+import api, { apiErrorCode, sessionPaths } from './api';
+import { storage, type SessionKind } from '../utils/storage';
+import { User, ApiResponse, AuthTokens, Organization, Account } from '../types';
 
-interface LoginResponse {
+interface TenantLoginResponse {
+  /** Absent from APIs that predate account sessions, which issued only these. */
+  session?: 'tenant';
   user: User;
   organization: Organization;
   accessToken: string;
   refreshToken: string;
 }
 
+interface AccountLoginResponse {
+  session: 'account';
+  account: Account;
+  organization: null;
+  accessToken: string;
+  refreshToken: string;
+}
+
+/**
+ * What a sign-in opened: a membership in an organization, or — for someone who
+ * belongs to none yet — their account alone.
+ */
+export type LoginResult =
+  | { session: 'tenant'; user: User; organization: Organization }
+  | { session: 'account'; account: Account };
+
 export interface MeResponse {
   user: User;
   organization: Organization;
   isOrganizer: boolean;
+}
+
+export interface AccountMeResponse {
+  account: Account;
+  /** Above zero once someone has added this person to an organization. */
+  organizationCount: number;
 }
 
 /** One of the organizations an account belongs to, offered for selection. */
@@ -45,28 +69,38 @@ export const authService = {
    *
    * `organizationId` is only needed when the account belongs to several
    * organizations — the minority — so the login screen does not ask for it up
-   * front and only shows a picker if the API says it must. A suspended account
-   * (403 `ACCOUNT_SUSPENDED`) or one with no organization (403
-   * `NO_ORGANIZATION`) surfaces as the API's message.
+   * front and only shows a picker if the API says it must. Someone who belongs
+   * to no organization gets an account session. A suspended account (403
+   * `ACCOUNT_SUSPENDED`) or an unconfirmed registration (403
+   * `EMAIL_NOT_VERIFIED`) surfaces as the API's message.
    */
   async login(
     identifier: string,
     password: string,
     organizationId?: string
-  ): Promise<LoginResponse> {
+  ): Promise<LoginResult> {
     try {
-      const { data } = await api.post<ApiResponse<LoginResponse>>('/auth/login', {
-        identifier,
-        password,
-        ...(organizationId ? { organizationId } : {}),
-      });
+      const { data } = await api.post<ApiResponse<TenantLoginResponse | AccountLoginResponse>>(
+        '/auth/login',
+        {
+          identifier,
+          password,
+          ...(organizationId ? { organizationId } : {}),
+        }
+      );
 
-      if (!data.data.accessToken || !data.data.refreshToken) {
+      const payload = data.data;
+      if (!payload.accessToken || !payload.refreshToken) {
         throw new Error('Missing tokens in response');
       }
 
-      await storage.setTokens(data.data.accessToken, data.data.refreshToken);
-      return data.data;
+      if (payload.session === 'account') {
+        await storage.setTokens(payload.accessToken, payload.refreshToken, 'account');
+        return { session: 'account', account: payload.account };
+      }
+
+      await storage.setTokens(payload.accessToken, payload.refreshToken, 'tenant');
+      return { session: 'tenant', user: payload.user, organization: payload.organization };
     } catch (error: any) {
       if (apiErrorCode(error) === 'ORGANIZATION_SELECTION_REQUIRED') {
         const organizations =
@@ -82,14 +116,23 @@ export const authService = {
     return data.data;
   },
 
+  /** The signed-in person, on an account session. */
+  async getAccountMe(): Promise<AccountMeResponse> {
+    const { data } = await api.get<ApiResponse<AccountMeResponse>>('/accounts/me');
+    return data.data;
+  },
+
+  async getSessionKind(): Promise<SessionKind> {
+    return storage.getSessionKind();
+  },
+
   async refresh(): Promise<AuthTokens> {
     const refreshToken = await storage.getRefreshToken();
     if (!refreshToken) throw new Error('No refresh token available');
 
     try {
-      const { data } = await api.post<ApiResponse<LoginResponse>>('/auth/refresh', {
-        refreshToken,
-      });
+      const { refresh } = sessionPaths(await storage.getSessionKind());
+      const { data } = await api.post<ApiResponse<AuthTokens>>(refresh, { refreshToken });
 
       if (!data.data.accessToken || !data.data.refreshToken) {
         throw new Error('Missing tokens in refresh response');
@@ -114,10 +157,13 @@ export const authService = {
 
   async logout(): Promise<void> {
     try {
-      const refreshToken = await storage.getRefreshToken();
+      const [refreshToken, kind] = await Promise.all([
+        storage.getRefreshToken(),
+        storage.getSessionKind(),
+      ]);
       // Best effort: tell the server to drop this session so the refresh token
       // stops working. A failure here must not block the local sign-out.
-      await api.post('/auth/logout', { refreshToken }).catch(() => undefined);
+      await api.post(sessionPaths(kind).logout, { refreshToken }).catch(() => undefined);
     } finally {
       await storage.clearTokens();
     }
