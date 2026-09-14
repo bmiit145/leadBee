@@ -90,6 +90,30 @@ export interface Account {
   emailVerifiedAt?: string;
 }
 
+/** One organization the signed-in person belongs to, as the switcher shows it. */
+export interface OrganizationSummary {
+  _id: string;
+  name: string;
+  slug: string;
+  status: OrgStatus;
+  plan: Plan;
+  /** Their role in that organization. */
+  role: string;
+  /** False when their access there has been deactivated. */
+  membershipActive: boolean;
+  /** False when the organization is suspended, cancelled or its trial lapsed. */
+  usable: boolean;
+  isCurrent: boolean;
+  isDefault: boolean;
+  unreadNotifications: number;
+}
+
+export interface OrganizationsOverview {
+  organizations: OrganizationSummary[];
+  /** Organizations they own against the most they may own. Decided by the API. */
+  ownership: { owned: number; limit: number; canCreate: boolean };
+}
+
 export interface AuthTokens {
   accessToken: string;
   refreshToken: string;

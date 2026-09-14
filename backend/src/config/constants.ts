@@ -268,6 +268,8 @@ export const AUDIT_ACTIONS = {
   ORG_CREATED: 'org_created',
   ORG_STATUS_CHANGED: 'org_status_changed',
   ORG_PLAN_CHANGED: 'org_plan_changed',
+  // A person with several organizations moved into this one (ADR-0004).
+  ORGANIZATION_SWITCHED_IN: 'organization_switched_in',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

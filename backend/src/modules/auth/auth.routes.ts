@@ -17,9 +17,25 @@ import {
 } from '../../lib/schemas.js';
 import { message, ok } from '../../lib/response.js';
 import { User } from '../../models/User.js';
+import { Account } from '../../models/Account.js';
 import { Project } from '../../models/Project.js';
 import { AppError } from '../../lib/errors.js';
 import { identityService } from '../accounts/identity.service.js';
+import { membershipsService } from '../accounts/memberships.service.js';
+import { accountOrganizationService } from '../accounts/accountOrganization.service.js';
+import { createOrganizationBody } from '../accounts/organization.schema.js';
+import type { LoginResult } from './auth.service.js';
+
+/** The response body for any request that opens a membership session. */
+function tenantSession(result: LoginResult) {
+  return {
+    session: 'tenant' as const,
+    user: result.user.toJSON(),
+    organization: result.organization.toJSON(),
+    accessToken: result.tokens.accessToken,
+    refreshToken: result.tokens.refreshToken,
+  };
+}
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   const r = app.withTypeProvider<ZodTypeProvider>();
@@ -135,6 +151,122 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         organization: auth.organization.toJSON(),
         isOrganizer: auth.isOrganizer,
       });
+    },
+  });
+
+  // ─── The organizations this person belongs to (ADR-0004) ─────────────────────
+  // One sign-in, several organizations. Everything here acts on the account
+  // behind the verified token — never on an account id from the client.
+
+  r.route({
+    method: 'GET',
+    url: '/organizations',
+    preHandler: [app.authenticateTenant],
+    schema: {
+      tags: ['auth'],
+      summary: 'Every organization you belong to, for the switcher',
+      description:
+        'Each with name, status, your role, whether it can be opened, whether it ' +
+        'is current or your default, and your unread notifications there. ' +
+        '`ownership` reports organizations you own against your limit.',
+      security: [{ tenantToken: [] }],
+      response: { 200: okEnvelope, ...commonErrors },
+    },
+    handler: async (request) => ok(await membershipsService.list(request.auth!)),
+  });
+
+  r.route({
+    method: 'POST',
+    url: '/switch-organization',
+    preHandler: [app.authenticateTenant],
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    schema: {
+      tags: ['auth'],
+      summary: 'Open another organization you belong to, without signing in again',
+      description:
+        'Answers with a tenant session for the target organization — the same ' +
+        'shape as sign-in. Send `refreshToken` to end this device’s session in ' +
+        'the organization being left. 404 when you are not a member; 403 ' +
+        '`MEMBERSHIP_INACTIVE` when your access there is deactivated; 409 ' +
+        '`ORGANIZATION_UNAVAILABLE` when the organization is suspended or its ' +
+        'trial has lapsed.',
+      security: [{ tenantToken: [] }],
+      body: z.object({
+        organizationId: objectIdSchema,
+        refreshToken: z.string().optional(),
+      }),
+      response: { 200: okEnvelope, ...commonErrors, 409: commonErrors[400] },
+    },
+    handler: async (request) => {
+      const result = await membershipsService.switchTo(request.auth!, request.body.organizationId, {
+        refreshToken: request.body.refreshToken,
+        ip: request.ip,
+        userAgent: request.headers['user-agent'],
+      });
+      request.log.info(
+        {
+          fromOrgId: request.auth!.organizationId.toString(),
+          toOrgId: result.organization._id.toString(),
+        },
+        'organization switched'
+      );
+      return ok(tenantSession(result));
+    },
+  });
+
+  r.route({
+    method: 'PUT',
+    url: '/default-organization',
+    preHandler: [app.authenticateTenant],
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    schema: {
+      tags: ['auth'],
+      summary: 'Choose the organization that opens first when you sign in',
+      description: '`null` clears it; sign-in then opens the organization you used last.',
+      security: [{ tenantToken: [] }],
+      body: z.object({ organizationId: objectIdSchema.nullable() }),
+      response: { 200: okEnvelope, ...commonErrors },
+    },
+    handler: async (request) =>
+      ok(await membershipsService.setDefault(request.auth!, request.body.organizationId)),
+  });
+
+  r.route({
+    method: 'POST',
+    url: '/organizations',
+    preHandler: [app.authenticateTenant],
+    // Creates a tenant — expensive and abusable, like public signup.
+    config: { rateLimit: { max: 5, timeWindow: '1 hour' } },
+    schema: {
+      tags: ['auth'],
+      summary: 'Create another organization, owned by you, and open it',
+      description:
+        'For someone already in an organization; a person with none uses ' +
+        '`POST /accounts/organizations`. Answers with a tenant session for the new ' +
+        'organization. Send `refreshToken` to end this device’s session in the ' +
+        'current one. 403 `ORGANIZATION_LIMIT_REACHED` past the number of ' +
+        'organizations you may own; 409 when the handle is taken.',
+      security: [{ tenantToken: [] }],
+      body: createOrganizationBody.extend({ refreshToken: z.string().optional() }),
+      response: { 201: okEnvelope, ...commonErrors, 409: commonErrors[400] },
+    },
+    handler: async (request, reply) => {
+      const auth = request.auth!;
+      const account = await Account.findById(auth.accountId);
+      if (!account) throw AppError.unauthorized('Account not found');
+
+      const { refreshToken, ...details } = request.body;
+      const result = await accountOrganizationService.create(account, details, {
+        via: 'membership',
+        userId: auth.userId,
+        refreshToken,
+      });
+
+      request.log.info(
+        { orgId: result.organization._id.toString(), slug: result.organization.slug },
+        'organization created by an existing member'
+      );
+      return reply.status(201).send(ok(tenantSession(result)));
     },
   });
 

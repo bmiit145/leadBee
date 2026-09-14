@@ -81,6 +81,16 @@ export interface IAccount extends Document {
    */
   refreshTokens: string[];
 
+  /** Opens first at sign-in when the person has several organizations. Chosen by them. */
+  defaultOrganizationId?: mongoose.Types.ObjectId;
+  /** The organization a membership session last opened — the fallback when there is no default. */
+  lastOrganizationId?: mongoose.Types.ObjectId;
+  /**
+   * How many organizations this person may own. Absent means the platform
+   * default (`DEFAULT_OWNED_ORGANIZATION_LIMIT`); set by platform staff.
+   */
+  ownedOrganizationLimit?: number;
+
   /** Written by platform staff. Never shown to the account holder. */
   internalNotes?: string;
 
@@ -142,6 +152,9 @@ const accountSchema = new Schema<IAccount>(
     signupUserAgent: { type: String, maxlength: 300 },
     lastLoginAt: { type: Date },
     refreshTokens: { type: [String], default: [], select: false },
+    defaultOrganizationId: { type: Schema.Types.ObjectId, ref: 'Organization' },
+    lastOrganizationId: { type: Schema.Types.ObjectId, ref: 'Organization' },
+    ownedOrganizationLimit: { type: Number, min: 0, max: 1000 },
 
     internalNotes: { type: String, trim: true, maxlength: 5000 },
   },

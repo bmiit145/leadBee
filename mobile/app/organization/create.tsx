@@ -51,7 +51,9 @@ export default function CreateOrganizationScreen() {
   const { t } = useTranslation();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { account, createOrganization } = useAuth();
+  const { account, user, createOrganization } = useAuth();
+  // First organization: the account session. Another one: the membership.
+  const ownerEmail = account?.email ?? user?.email;
 
   const [name, setName] = useState('');
   const [handle, setHandle] = useState('');
@@ -235,11 +237,11 @@ export default function CreateOrganizationScreen() {
             <Text style={[styles.hintText, { color: handleHint.color }]}>{handleHint.text}</Text>
           </View>
 
-          {account?.email ? (
+          {ownerEmail ? (
             <View style={styles.ownerNote}>
               <Ionicons name="shield-checkmark-outline" size={16} color={colors.textSecondary} />
               <Text style={styles.ownerNoteText}>
-                {t('createOrganization.ownerNote', { email: account.email })}
+                {t('createOrganization.ownerNote', { email: ownerEmail })}
               </Text>
             </View>
           ) : null}

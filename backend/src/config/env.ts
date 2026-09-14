@@ -63,6 +63,11 @@ const envSchema = z.object({
     .string()
     .default('true')
     .transform((v) => v === 'true'),
+
+  // How many organizations one person may own, unless their account carries its
+  // own limit. Tier 1 target (CFG-1): moves to a platform setting, then to a
+  // plan grant. See KNOWN-GAPS 6.9.
+  DEFAULT_OWNED_ORGANIZATION_LIMIT: z.coerce.number().int().min(1).max(100).default(3),
   TRIAL_DAYS: z.coerce.number().int().positive().default(14),
 
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),

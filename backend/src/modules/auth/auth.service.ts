@@ -12,6 +12,7 @@ import { runInTenantScope, withoutTenantScope } from '../../lib/tenantContext.js
 import { identifierKind } from '../accounts/identity.js';
 import { identityService } from '../accounts/identity.service.js';
 import { accountSessionService, type AccountSession } from '../accounts/accountSession.service.js';
+import { chooseSignInOrganization } from '../accounts/membershipChoice.js';
 
 /** How many concurrent sessions one membership may hold. Oldest is evicted past this. */
 const MAX_SESSIONS = 5;
@@ -120,19 +121,39 @@ export const authService = {
       if (!chosen) throw AppError.forbidden('You are not an active member of that organization.');
       user = chosen;
     } else if (active.length > 1) {
-      const orgs = await withoutTenantScope('login: org selection list', () =>
-        Organization.find({ _id: { $in: active.map((membership) => membership.organizationId) } })
-          .select('name slug')
-          .lean()
+      const orgs = await withoutTenantScope('login: the organizations to open or choose from', () =>
+        Organization.find({
+          _id: { $in: active.map((membership) => membership.organizationId) },
+        }).exec()
       );
-      return {
-        needsOrgSelection: true,
-        organizations: orgs.map((o) => ({
-          _id: o._id.toString(),
-          name: o.name,
-          slug: o.slug,
+
+      // Default, then last used, then ask — see membershipChoice.ts.
+      const choice = chooseSignInOrganization(
+        active.map((membership) => ({
+          organizationId: membership.organizationId.toString(),
+          usable: orgs.some(
+            (org) => org._id.equals(membership.organizationId) && org.isUsable()
+          ),
         })),
-      };
+        {
+          defaultOrganizationId: account.defaultOrganizationId?.toString(),
+          lastOrganizationId: account.lastOrganizationId?.toString(),
+        }
+      );
+
+      if (choice.kind === 'ask') {
+        return {
+          needsOrgSelection: true,
+          organizations: orgs.map((o) => ({
+            _id: o._id.toString(),
+            name: o.name,
+            slug: o.slug,
+          })),
+        };
+      }
+      user = active.find(
+        (membership) => membership.organizationId.toString() === choice.organizationId
+      )!;
     } else {
       user = active[0]!;
     }
@@ -188,6 +209,13 @@ export const authService = {
     });
 
     user.permissions = await runInTenantScope(scope, () => effectivePermissions(user));
+
+    // Where the next sign-in opens, for a person with several organizations.
+    // Awaited: a sign-in straight after a switch must already see it.
+    await Account.updateOne(
+      { _id: user.accountId },
+      { $set: { lastOrganizationId: organization._id } }
+    );
 
     void Organization.updateOne(
       { _id: organization._id },

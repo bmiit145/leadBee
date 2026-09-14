@@ -1,5 +1,13 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Alert, ScrollView, RefreshControl } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Alert,
+  ScrollView,
+  RefreshControl,
+  TouchableOpacity,
+} from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -12,6 +20,8 @@ import { meetingService } from '../../src/services/meeting.service';
 import { queryKeys } from '../../src/lib/queryKeys';
 import { ScreenHeader, ListCard, ListRow } from '../../src/components/ui';
 import { useViewModeSwitch } from '../../src/components/ViewModeSwitch';
+import { useOrganizationSwitcher } from '../../src/components/organizations/OrganizationSwitcher';
+import { organizationsService } from '../../src/services/organizations.service';
 import { formatDate, localeTag, toTitleCase } from '../../src/utils/format';
 import { colors, spacing, borderRadius, shadows } from '../../src/theme';
 
@@ -53,6 +63,15 @@ export default function ProfileScreen() {
   // Organizer/agent switch lives in the top bar; the hook renders nothing for
   // an agent, who has only one view.
   const viewSwitch = useViewModeSwitch();
+  const { openSwitcher } = useOrganizationSwitcher();
+
+  // Same key as the switcher, so opening either reuses the other's answer.
+  const organizationsOverview = useQuery({
+    queryKey: queryKeys.organizations.overview,
+    queryFn: () => organizationsService.overview(),
+    staleTime: STATS_STALE_MS,
+  });
+  const organizationCount = organizationsOverview.data?.organizations.length;
 
   if (!user) return null;
 
@@ -151,9 +170,19 @@ export default function ProfileScreen() {
                 {user.name}
               </Text>
               {organization ? (
-                <Text style={styles.orgName} numberOfLines={1}>
-                  {organization.name}
-                </Text>
+                <TouchableOpacity
+                  style={styles.orgRow}
+                  onPress={openSwitcher}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('organizations.openSwitcher', { name: organization.name })}
+                  hitSlop={{ top: 6, bottom: 6 }}
+                >
+                  <Text style={styles.orgName} numberOfLines={1}>
+                    {organization.name}
+                  </Text>
+                  <Ionicons name="chevron-down" size={16} color={colors.textSecondary} />
+                </TouchableOpacity>
               ) : null}
             </View>
             <View style={styles.roleBadge}>
@@ -198,6 +227,14 @@ export default function ProfileScreen() {
             icon="business-outline"
             title={t('profile.myCompany')}
             onPress={() => router.push('/account/company')}
+          />
+          <ListRow
+            icon="swap-horizontal-outline"
+            title={t('organizations.title')}
+            subtitle={
+              organizationCount ? t('organizations.totalCount', { count: organizationCount }) : undefined
+            }
+            onPress={() => router.push('/account/organizations')}
           />
           <ListRow
             icon="settings-outline"
@@ -250,7 +287,8 @@ const styles = StyleSheet.create({
   identityRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
   identityText: { flex: 1 },
   name: { fontSize: 24, fontWeight: '700', color: colors.text },
-  orgName: { fontSize: 15, color: colors.textSecondary, marginTop: 2 },
+  orgRow: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 4, marginTop: 2 },
+  orgName: { flexShrink: 1, fontSize: 15, color: colors.textSecondary },
   roleBadge: {
     paddingHorizontal: 14,
     paddingVertical: 6,

@@ -3,6 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Account, User } from '../types';
 import { authService } from '../services/auth.service';
 import { onboardingService } from '../services/onboarding.service';
+import { organizationsService } from '../services/organizations.service';
+import { queryClient } from '../lib/queryClient';
 import { storage, type SessionKind } from '../utils/storage';
 import { systemService, ServerStatus } from '../services/system.service';
 import { setForcedLogoutCallback, setOrgInactiveCallback } from '../services/api';
@@ -61,11 +63,24 @@ interface AuthContextType {
    */
   reloadAccount: () => Promise<number>;
   /**
-   * On an account session: creates an organization owned by the signed-in
-   * person and switches to it. Afterwards `isAuthenticated` is true.
+   * Creates an organization owned by the signed-in person and switches to it —
+   * from an account session (their first) or a membership (another one).
+   * Afterwards `isAuthenticated` is true.
    */
   createOrganization: (details: { organizationName: string; slug?: string }) => Promise<void>;
+  /**
+   * Moves this device into another organization the person belongs to. Clears
+   * everything cached for the one being left. Rejects with the API's error.
+   */
+  switchOrganization: (organizationId: string, organizationName: string) => Promise<void>;
+  /** The organization being switched to, while a switch is in flight. */
+  organizationTransition: string | null;
   checkServerHealth: () => Promise<ServerStatus>;
+  /**
+   * "Try again" on the server-down screen: checks the server and, once it
+   * answers, restores the stored session.
+   */
+  retryServerConnection: () => Promise<ServerStatus>;
   hasPermission: (permission: string) => boolean;
   hasAnyPermission: (permissions: string[]) => boolean;
 }
@@ -76,6 +91,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [account, setAccount] = useState<Account | null>(null);
+  const [organizationTransition, setOrganizationTransition] = useState<string | null>(null);
   const [orgInactiveMessage, setOrgInactiveMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
@@ -181,6 +197,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [clearSessionState, restoreAccountSession]);
 
+  // Startup skips restoring the session while the server is unreachable, so
+  // recovering has to restore it too. Checking health alone left a person who is
+  // still validly signed in at the sign-in screen once the server came back.
+  const retryServerConnection = useCallback(async () => {
+    const status = await checkServerHealth();
+    if (status === 'healthy') await checkAuth();
+    return status;
+  }, [checkServerHealth, checkAuth]);
+
   const refreshAuth = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -222,15 +247,50 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return me.organizationCount;
   }, []);
 
-  const createOrganization = useCallback(
-    async (details: { organizationName: string; slug?: string }) => {
-      const session = await onboardingService.createOrganization(details);
+  /**
+   * Makes a membership session that the API has just issued the current one.
+   *
+   * Everything cached belongs to the organization being left, so it goes first:
+   * queries are reset (their data dropped, active ones refetched with the new
+   * tokens, which are already stored) and the saved project choice is cleared.
+   * Otherwise the new organization would show the old one's leads for a frame —
+   * or, for a query that is not refetched, until the app restarts.
+   */
+  const adoptMembershipSession = useCallback(
+    async (session: { user: User; organization: Organization }) => {
+      void queryClient.resetQueries();
+      await storage.clearProjectCache();
       setAccount(null);
+      setOrgInactiveMessage(null);
       setUser(session.user);
       setOrganization(session.organization);
       await storage.setUser(session.user);
     },
     []
+  );
+
+  const createOrganization = useCallback(
+    async (details: { organizationName: string; slug?: string }) => {
+      const onAccountSession = (await storage.getSessionKind()) === 'account';
+      const session = onAccountSession
+        ? await onboardingService.createOrganization(details)
+        : await organizationsService.create(details);
+      await adoptMembershipSession(session);
+    },
+    [adoptMembershipSession]
+  );
+
+  const switchOrganization = useCallback(
+    async (organizationId: string, organizationName: string) => {
+      setOrganizationTransition(organizationName);
+      try {
+        const session = await organizationsService.switchTo(organizationId);
+        await adoptMembershipSession(session);
+      } finally {
+        setOrganizationTransition(null);
+      }
+    },
+    [adoptMembershipSession]
   );
 
   const login = useCallback(
@@ -271,6 +331,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       clearSessionState();
       setOrgInactiveMessage(null);
       await storage.clearTokens();
+      // The next person to sign in on this device must not see this one's data.
+      queryClient.clear();
       setIsLoading(false);
     }
   }, [clearSessionState]);
@@ -377,7 +439,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     reloadSession,
     reloadAccount,
     createOrganization,
+    switchOrganization,
+    organizationTransition,
     checkServerHealth,
+    retryServerConnection,
     hasPermission,
     hasAnyPermission,
   };

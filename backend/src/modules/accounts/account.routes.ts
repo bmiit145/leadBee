@@ -4,6 +4,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { accountService } from './account.service.js';
 import { accountSessionService } from './accountSession.service.js';
 import { accountOrganizationService } from './accountOrganization.service.js';
+import { createOrganizationBody } from './organization.schema.js';
 import { registerBody, resendVerificationBody, verifyEmailBody } from './account.schema.js';
 import { commonErrors, errorEnvelope, messageEnvelope, okEnvelope } from '../../lib/schemas.js';
 import { message, ok } from '../../lib/response.js';
@@ -123,22 +124,14 @@ export async function accountRoutes(app: FastifyInstance): Promise<void> {
         'handle is taken or the person already belongs to an organization. ' +
         'Disabled when `ALLOW_SELF_SERVE_SIGNUP=false`.',
       security: [{ accountToken: [] }],
-      body: z.object({
-        organizationName: z.string().trim().min(2, 'Organization name is required').max(120),
-        slug: z
-          .string()
-          .trim()
-          .min(3)
-          .max(50)
-          .regex(/^[a-z0-9-]+$/, 'Use lowercase letters, numbers and hyphens only')
-          .optional(),
-      }),
+      body: createOrganizationBody,
       response: { 201: okEnvelope, ...commonErrors, 409: commonErrors[400] },
     },
     handler: async (request, reply) => {
       const result = await accountOrganizationService.create(
         request.accountAuth!.account,
-        request.body
+        request.body,
+        { via: 'account' }
       );
 
       request.log.info(

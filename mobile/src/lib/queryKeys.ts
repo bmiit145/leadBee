@@ -46,4 +46,8 @@ export const queryKeys = {
     all: ['notifications'] as const,
     unreadCount: ['notifications', 'unread-count'] as const,
   },
+  /** Every organization the person belongs to — the switcher and its screen. */
+  organizations: {
+    overview: ['organizations', 'overview'] as const,
+  },
 };

@@ -74,6 +74,7 @@ classified. This table is the migration plan.
 | `LOG_LEVEL` | `observability.logLevel` | enum |
 | `MONGO_DEBUG` | `observability.mongoDebug` | boolean |
 | `ALLOW_SELF_SERVE_SIGNUP` | `signup.selfServeEnabled` | boolean |
+| `DEFAULT_OWNED_ORGANIZATION_LIMIT` | `organizations.ownedPerAccountDefault` (then a plan grant) | 1 … 100 |
 | `CORS_ORIGINS` | `security.corsOrigins` | absolute `https://` origins; no wildcard in production |
 | `RATE_LIMIT_MAX` | `security.rateLimit.max` | 1 … 10 000 |
 | `RATE_LIMIT_WINDOW` | `security.rateLimit.window` | duration string |

@@ -1334,6 +1334,57 @@ async function main(): Promise<void> {
     creatorLogin.json()
   );
 
+  // ─── Another organization, from inside one, within the ownership limit ──────
+  await Account.updateOne({ email: creatorEmail }, { $set: { ownedOrganizationLimit: 2 } });
+  const creatorMembership = creatorLogin.json()?.data;
+  const createFromMembership = (accessToken: unknown, payload: Record<string, unknown>) =>
+    app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/organizations',
+      headers: { authorization: `Bearer ${accessToken}`, ...registrationHeaders },
+      payload,
+    });
+
+  const secondOwn = await createFromMembership(creatorMembership?.accessToken, {
+    organizationName: `Smoke Second Own ${provisionStamp}`,
+    refreshToken: creatorMembership?.refreshToken,
+  });
+  const secondOwnData = secondOwn.json()?.data;
+  const secondOrgId = secondOwnData?.organization?._id as string | undefined;
+  check(
+    'A member creates another organization and is switched into it',
+    secondOwn.statusCode === 201 &&
+      secondOwnData?.session === 'tenant' &&
+      secondOrgId !== createdOrgId &&
+      secondOwnData?.user?.role === 'owner',
+    secondOwn.json()
+  );
+
+  const overLimit = await createFromMembership(secondOwnData?.accessToken, {
+    organizationName: `Smoke Over Limit ${provisionStamp}`,
+  });
+  check(
+    'Creating past the ownership limit is refused',
+    overLimit.statusCode === 403 && overLimit.json()?.error?.code === 'ORGANIZATION_LIMIT_REACHED',
+    overLimit.json()
+  );
+
+  const creatorOverview = await app.inject({
+    method: 'GET',
+    url: '/api/v1/auth/organizations',
+    headers: { authorization: `Bearer ${secondOwnData?.accessToken}` },
+  });
+  const creatorOwnership = creatorOverview.json()?.data?.ownership;
+  check(
+    'The organization list reports ownership against the limit',
+    creatorOverview.statusCode === 200 &&
+      creatorOverview.json()?.data?.organizations?.length === 2 &&
+      creatorOwnership?.owned === 2 &&
+      creatorOwnership?.limit === 2 &&
+      creatorOwnership?.canCreate === false,
+    creatorOverview.json()
+  );
+
   // An existing person: linked, not duplicated, and no password needed.
   const provisionLinked = await provisionOrg({
     organizationName: `Smoke Linked ${provisionStamp}`,
@@ -1348,17 +1399,135 @@ async function main(): Promise<void> {
     provisionLinked.json()
   );
 
-  const twoOrgLogin = await app.inject({
-    method: 'POST',
-    url: '/api/v1/auth/login',
-    payload: { identifier: 'manager@acme.test', password: 'Password@123' },
-  });
+  // With nothing to go on — no default, nothing used before — sign-in asks.
+  await Account.updateOne(
+    { email: 'manager@acme.test' },
+    { $unset: { defaultOrganizationId: 1, lastOrganizationId: 1 } }
+  );
+  // Sign-in is limited to 10 a minute per IP, and the run signs in far more than
+  // that; these get an address of their own, like registration above.
+  const managerHeaders = { 'x-forwarded-for': `10.${octet()}.${octet()}.${octet()}` };
+  const managerSignIn = (organizationId?: string) =>
+    app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      headers: managerHeaders,
+      payload: {
+        identifier: 'manager@acme.test',
+        password: 'Password@123',
+        ...(organizationId ? { organizationId } : {}),
+      },
+    });
+
+  const twoOrgLogin = await managerSignIn();
   check(
     'That person now has one sign-in for both organizations',
     twoOrgLogin.statusCode === 409 &&
       twoOrgLogin.json()?.error?.code === 'ORGANIZATION_SELECTION_REQUIRED' &&
       twoOrgLogin.json()?.error?.details?.organizations?.length === 2,
     twoOrgLogin.json()
+  );
+
+  // ─── Switching between organizations (ADR-0004) ─────────────────────────────
+  const linkedSignIn = await managerSignIn(linkedOrgId);
+  const linkedSession = linkedSignIn.json()?.data;
+  const linkedAuth = { authorization: `Bearer ${linkedSession?.accessToken}` };
+  check(
+    'Choosing an organization at sign-in opens it',
+    linkedSignIn.statusCode === 200 && linkedSession?.organization?._id === linkedOrgId,
+    linkedSignIn.json()
+  );
+
+  const lastUsedSignIn = await managerSignIn();
+  check(
+    'Signing in again opens the organization used last, without asking',
+    lastUsedSignIn.statusCode === 200 &&
+      lastUsedSignIn.json()?.data?.organization?._id === linkedOrgId,
+    lastUsedSignIn.json()
+  );
+
+  const managerOverview = await app.inject({
+    method: 'GET',
+    url: '/api/v1/auth/organizations',
+    headers: linkedAuth,
+  });
+  const managerOrgs = (managerOverview.json()?.data?.organizations ?? []) as Array<
+    Record<string, unknown>
+  >;
+  const currentOrgs = managerOrgs.filter((org) => org.isCurrent === true);
+  const otherOrg = managerOrgs.find((org) => org.isCurrent !== true);
+  check(
+    'The switcher lists every organization, marking the current one',
+    managerOverview.statusCode === 200 &&
+      managerOrgs.length === 2 &&
+      currentOrgs.length === 1 &&
+      currentOrgs[0]?._id === linkedOrgId &&
+      typeof otherOrg?.unreadNotifications === 'number' &&
+      managerOrgs.every((org) => !('organizationId' in org)),
+    managerOverview.json()
+  );
+
+  const switched = await app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/switch-organization',
+    headers: linkedAuth,
+    payload: { organizationId: otherOrg?._id, refreshToken: linkedSession?.refreshToken },
+  });
+  const switchedSession = switched.json()?.data;
+  const switchedAuth = { authorization: `Bearer ${switchedSession?.accessToken}` };
+  check(
+    'Switching opens the other organization without a password',
+    switched.statusCode === 200 &&
+      switchedSession?.session === 'tenant' &&
+      switchedSession?.organization?._id === otherOrg?._id,
+    switched.json()
+  );
+
+  const leftSessionRefresh = await app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/refresh',
+    payload: { refreshToken: linkedSession?.refreshToken },
+  });
+  check(
+    'Switching ends this device’s session in the organization it left',
+    leftSessionRefresh.statusCode === 401,
+    leftSessionRefresh.statusCode
+  );
+
+  const switchToStranger = await app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/switch-organization',
+    headers: switchedAuth,
+    payload: { organizationId: provisionedOrgId },
+  });
+  check(
+    'Switching to an organization the person does not belong to is refused',
+    switchToStranger.statusCode === 404,
+    switchToStranger.json()
+  );
+
+  const setDefault = await app.inject({
+    method: 'PUT',
+    url: '/api/v1/auth/default-organization',
+    headers: switchedAuth,
+    payload: { organizationId: linkedOrgId },
+  });
+  const defaults = ((setDefault.json()?.data?.organizations ?? []) as Array<Record<string, unknown>>)
+    .filter((org) => org.isDefault === true)
+    .map((org) => org._id);
+  check(
+    'A person can choose their default organization',
+    setDefault.statusCode === 200 && defaults.length === 1 && defaults[0] === linkedOrgId,
+    setDefault.json()
+  );
+
+  // Last used is now the other organization (the switch); the default wins.
+  const defaultSignIn = await managerSignIn();
+  check(
+    'Sign-in opens the default organization ahead of the one used last',
+    defaultSignIn.statusCode === 200 &&
+      defaultSignIn.json()?.data?.organization?._id === linkedOrgId,
+    defaultSignIn.json()
   );
 
   const newWithoutPassword = await provisionOrg({
@@ -1484,8 +1653,15 @@ async function main(): Promise<void> {
     });
     // The provisioned organizations. The linked one's owner is the seeded
     // manager, whose account stays — only that extra membership goes.
-    for (const organizationId of [provisionedOrgId, linkedOrgId, createdOrgId]) {
+    // The seeded manager keeps their account; only the preferences that point
+    // at the deleted organization go.
+    await Account.updateOne(
+      { email: 'manager@acme.test' },
+      { $unset: { defaultOrganizationId: 1, lastOrganizationId: 1 } }
+    );
+    for (const organizationId of [provisionedOrgId, linkedOrgId, createdOrgId, secondOrgId]) {
       if (!organizationId) continue;
+      await AuditLog.deleteMany({ organizationId });
       await Lead.deleteMany({ organizationId });
       await User.deleteMany({ organizationId });
       await Role.deleteMany({ organizationId });

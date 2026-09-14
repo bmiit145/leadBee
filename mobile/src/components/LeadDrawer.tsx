@@ -15,6 +15,10 @@ import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { colors } from '../theme';
+import { useAuth } from '../stores/auth.store';
+import { useOrganizationSwitcher } from './organizations/OrganizationSwitcher';
+import { Avatar } from './ui';
+import { toTitleCase } from '../utils/format';
 
 const DRAWER_WIDTH = Dimensions.get('window').width * 0.78;
 
@@ -39,6 +43,8 @@ export function LeadDrawer({ visible, onClose }: Props) {
   const router = useRouter();
   const { t } = useTranslation();
   const translateX = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
+  const { user, organization } = useAuth();
+  const { openSwitcher } = useOrganizationSwitcher();
 
   /**
    * The one section currently unfolded, or `null` for none — which is how the
@@ -115,6 +121,33 @@ export function LeadDrawer({ visible, onClose }: Props) {
             <Image source={require('../../assets/logo.png')} style={styles.logo} resizeMode="contain" />
             {APP_VERSION ? <Text style={styles.version}>v{APP_VERSION}</Text> : null}
           </View>
+
+          {/* The organization this menu belongs to — tap to switch or add one. */}
+          {organization ? (
+            <TouchableOpacity
+              style={styles.orgCard}
+              onPress={() => {
+                onClose();
+                openSwitcher();
+              }}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel={t('organizations.openSwitcher', { name: organization.name })}
+            >
+              <Avatar name={organization.name} size={38} variant="solid" />
+              <View style={styles.orgText}>
+                <Text style={styles.orgName} numberOfLines={1}>
+                  {organization.name}
+                </Text>
+                {user ? (
+                  <Text style={styles.orgRole} numberOfLines={1}>
+                    {toTitleCase(user.role)}
+                  </Text>
+                ) : null}
+              </View>
+              <Ionicons name="chevron-down" size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+          ) : null}
 
           <View style={styles.divider} />
 
@@ -213,6 +246,21 @@ const styles = StyleSheet.create({
   logoWrap: { paddingHorizontal: 20, paddingTop: 52, paddingBottom: 16, alignItems: 'center' },
   logo: { width: 130, height: 50 },
   version: { fontSize: 12, color: colors.textSecondary, marginTop: 4 },
+  orgCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceVariant,
+  },
+  orgText: { flex: 1, minWidth: 0 },
+  orgName: { fontSize: 15, fontWeight: '700', color: colors.text },
+  orgRole: { fontSize: 12, color: colors.textSecondary, marginTop: 1 },
   divider: { height: 1, backgroundColor: '#F0F0F0', marginVertical: 4 },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, gap: 12 },
   sectionIcon: {

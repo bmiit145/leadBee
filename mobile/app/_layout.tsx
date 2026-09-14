@@ -22,6 +22,10 @@ import { NoInternetScreen } from '../src/components/NoInternetScreen';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { ServerDownScreen } from '../src/components/ServerDownScreen';
 import { OrgInactiveScreen } from '../src/components/OrgInactiveScreen';
+import {
+  OrganizationSwitcherProvider,
+  OrganizationTransitionOverlay,
+} from '../src/components/organizations/OrganizationSwitcher';
 import { queryClient } from '../src/lib/queryClient';
 import { queryKeys } from '../src/lib/queryKeys';
 import { initializeI18n } from '../src/i18n';
@@ -40,9 +44,11 @@ function RootLayoutContent() {
     isInitialized,
     isAuthenticated,
     isAccountSession,
+    user,
+    organizationTransition,
     serverStatus,
     isCheckingServer,
-    checkServerHealth,
+    retryServerConnection,
     orgInactiveMessage,
     logout,
   } = useAuth();
@@ -150,9 +156,12 @@ function RootLayoutContent() {
   // open refreshes the badge.
   const [pendingPush, setPendingPush] = useState<PushTap | null>(null);
 
+  // Keyed on the membership, not just "signed in": a push token belongs to one
+  // membership, so switching organizations registers it with the new one.
+  const membershipId = user?._id;
   useEffect(() => {
     if (isAuthenticated) void registerForPushNotifications();
-  }, [isAuthenticated]);
+  }, [isAuthenticated, membershipId]);
 
   useEffect(
     () =>
@@ -199,7 +208,7 @@ function RootLayoutContent() {
     return (
       <ServerDownScreen
         status={serverStatus}
-        onRetry={checkServerHealth}
+        onRetry={retryServerConnection}
         isChecking={isCheckingServer}
       />
     );
@@ -220,7 +229,7 @@ function RootLayoutContent() {
   }
 
   return (
-    <>
+    <OrganizationSwitcherProvider>
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(auth)" options={{ headerShown: false, animation: 'none' }} />
         <Stack.Screen name="(leads)" options={{ headerShown: false, animation: 'none' }} />
@@ -245,7 +254,11 @@ function RootLayoutContent() {
       >
         {otaSnackbarMessage}
       </Snackbar>
-    </>
+
+      {organizationTransition ? (
+        <OrganizationTransitionOverlay organizationName={organizationTransition} />
+      ) : null}
+    </OrganizationSwitcherProvider>
   );
 }
 

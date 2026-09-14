@@ -384,6 +384,24 @@ registers in the app, confirms their email, and appears in the console under
 - **Watch.** Rate limits are the only bound (and are per instance, 6.3). If
   scraping shows up, add a CAPTCHA or proof of work to registration.
 
+### [ ] 6.9 The owned-organization limit is not yet a setting or a plan grant — P2 (CFG-1)
+
+- **What.** How many organizations one person may own is
+  `Account.ownedOrganizationLimit`, else `DEFAULT_OWNED_ORGANIZATION_LIMIT` (3)
+  from the environment. Nothing in the console reads or sets the per-account
+  value yet.
+- **Fix.** Move the default to a Tier 1 platform setting
+  (`organizations.ownedPerAccountDefault`), let a plan grant a higher number,
+  and add the per-account override to the account detail page, audited.
+
+### [ ] 6.10 A person cannot leave an organization — P1
+
+- **What.** The switcher and the Organizations screen offer switch and "set as
+  default", but not leave. Leaving needs what 6.6 needs (what happens to their
+  leads and seat), plus an owner handing over ownership first.
+- **Fix.** Build 6.6, then a self-serve "Leave organization" on the
+  Organizations screen that refuses the last owner.
+
 ---
 
 ## 7. Local development notes

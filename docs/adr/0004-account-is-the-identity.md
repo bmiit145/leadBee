@@ -85,6 +85,37 @@ holds its identifiers exclusively.
    also check the account's status on every call (ARCH-9), so suspension ends
    access at once, in every organization.
 
+### Several organizations (added 2026-09-14)
+
+One sign-in, any number of organizations, and a switcher to move between them.
+
+- **Sign-in** with several active memberships opens the person's **default**
+  organization, else the one they **used last** (`Account.lastOrganizationId`,
+  written whenever a membership session opens), provided it can be opened.
+  Otherwise it asks, as before (`modules/accounts/membershipChoice.ts`).
+- **`GET /auth/organizations`** lists every membership of the account behind
+  the verified token: organization name, status, role, whether it can be
+  opened, current, default, and unread notifications there — plus `ownership`.
+  A deliberate cross-tenant read (ARCH-4), keyed only on that account id; the
+  tenant key is not echoed (ARCH-6).
+- **`POST /auth/switch-organization`** issues a tenant session for another
+  membership of the same account without a password. It requires the account
+  active (already checked on every request), the target membership active (403
+  `MEMBERSHIP_INACTIVE`) and the organization usable (409
+  `ORGANIZATION_UNAVAILABLE` — deliberately not `ORGANIZATION_INACTIVE`, which
+  clients read as "the organization you are in is paused"). This device's
+  session in the organization being left ends, and its push token goes with it.
+  The switch is audited in the target organization (`organization_switched_in`).
+  Each membership keeps its own sessions, so deactivation in one organization
+  never signs the person out of another.
+- **`PUT /auth/default-organization`** sets or clears the default.
+- **`POST /auth/organizations`** creates another organization from inside one;
+  `POST /accounts/organizations` remains the path for a first one. Both are
+  capped by the number of organizations the person may **own** (memberships
+  with the `owner` role): `Account.ownedOrganizationLimit` when platform staff
+  set one, else `DEFAULT_OWNED_ORGANIZATION_LIMIT` (3). 403
+  `ORGANIZATION_LIMIT_REACHED`. This becomes a plan grant later (KNOWN-GAPS 6.9).
+
 ### Who may change what
 
 - **The person** (`PUT /auth/me`, `/auth/change-password`): their own name,
