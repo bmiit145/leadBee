@@ -94,6 +94,30 @@ const sanitizeForLog = (value: any): any => {
   }, {});
 };
 
+/**
+ * Requests that establish a session rather than use one.
+ *
+ * They never carry the stored access token, and a 401 from them means the
+ * credentials or code were wrong — not that a session expired — so it never
+ * triggers a refresh. Treating a wrong password as an expired token sent
+ * sign-in down the refresh path, and the person was shown that path's failure
+ * ("Network Error") instead of "Invalid email, mobile number or password".
+ */
+const SESSIONLESS_PATHS = [
+  '/auth/login',
+  '/auth/refresh',
+  '/accounts/register',
+  '/accounts/verify-email',
+  '/accounts/resend-verification',
+  '/accounts/session/refresh',
+];
+
+const isSessionless = (url?: string): boolean =>
+  !!url &&
+  SESSIONLESS_PATHS.some(
+    (path) => url === path || url.startsWith(`${path}?`) || url.startsWith(`${path}/`)
+  );
+
 const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 15000,
@@ -133,7 +157,9 @@ api.interceptors.request.use(
       console.log(`🚀 [API] ${config.method?.toUpperCase()} ${config.baseURL}${config.url}`);
     }
 
-    const token = await storage.getAccessToken();
+    // A leftover token on a sign-in request would make its 401 look like an
+    // expired session. See SESSIONLESS_PATHS.
+    const token = isSessionless(config.url) ? null : await storage.getAccessToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -171,14 +197,25 @@ api.interceptors.response.use(
 
     const code = error.response?.data?.error?.code;
 
-    if (error.response?.status === 403 && code === 'ORGANIZATION_INACTIVE') {
+    // Not for sign-in: someone not yet signed in has no session to pause, and
+    // the login screen explains the refusal itself.
+    if (
+      error.response?.status === 403 &&
+      code === 'ORGANIZATION_INACTIVE' &&
+      !isSessionless(originalRequest?.url)
+    ) {
       _orgInactiveCallback?.(
         error.response?.data?.error?.message ?? 'This organization is not active.'
       );
       return Promise.reject(error);
     }
 
-    if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
+    if (
+      error.response?.status === 401 &&
+      originalRequest &&
+      !originalRequest._retry &&
+      !isSessionless(originalRequest.url)
+    ) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
           failedQueue.push({ resolve, reject });

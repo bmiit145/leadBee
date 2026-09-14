@@ -22,7 +22,7 @@ import {
   OrganizationSelectionRequired,
   type OrgChoice,
 } from '../../src/services/auth.service';
-import { apiErrorMessage } from '../../src/services/api';
+import { describeSignInError, type SignInErrorView } from '../../src/utils/authErrors';
 import { loginSchema, LoginFormData } from '../../src/utils/validators';
 import { colors, spacing, borderRadius } from '../../src/theme';
 import { InlineFeedback } from '../../src/components/ui/InlineFeedback';
@@ -33,7 +33,7 @@ export default function LoginScreen() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginError, setLoginError] = useState<SignInErrorView | null>(null);
 
   /**
    * Only populated when the API reports this phone belongs to several tenants.
@@ -47,6 +47,7 @@ export default function LoginScreen() {
   const {
     control,
     handleSubmit,
+    setValue,
     formState: { errors },
   } = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
@@ -66,7 +67,11 @@ export default function LoginScreen() {
         setOrgChoices(error.organizations);
         return;
       }
-      setLoginError(apiErrorMessage(error, t('login.loginFailedMessage')));
+      // Every failure — wrong details, suspension, rate limit, server fault, no
+      // connection — gets its own title and message. See authErrors.ts.
+      const view = describeSignInError(error, t);
+      setLoginError(view);
+      if (view.clearPassword) setValue('password', '');
     } finally {
       setLoading(false);
     }
@@ -110,9 +115,9 @@ export default function LoginScreen() {
           <Text style={styles.formLabel}>SIGN IN TO CONTINUE</Text>
           {loginError ? (
             <InlineFeedback
-              tone="error"
-              title={t('login.loginFailed')}
-              message={loginError}
+              tone={loginError.tone}
+              title={loginError.title}
+              message={loginError.message}
               onDismiss={() => setLoginError(null)}
             />
           ) : null}
