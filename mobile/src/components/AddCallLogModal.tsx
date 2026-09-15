@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Modal,
   View,
@@ -33,13 +33,32 @@ interface Props {
     nextFollowUpAt?: string;
     duration?: number;
   }) => Promise<void>;
+  /** Prefills the form, for correcting a call already logged. */
+  initial?: { outcome: CallOutcome; notes?: string; nextFollowUpAt?: string } | null;
+  title?: string;
+  submitLabel?: string;
 }
 
-export function AddCallLogModal({ visible, onClose, onSubmit }: Props) {
+export function AddCallLogModal({
+  visible,
+  onClose,
+  onSubmit,
+  initial,
+  title = 'Log a Call',
+  submitLabel = 'Log Call',
+}: Props) {
   const [outcome, setOutcome] = useState<CallOutcome | null>(null);
   const [notes, setNotes] = useState('');
   const [followUpDate, setFollowUpDate] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  // Each opening starts from what is being corrected, or from blank.
+  useEffect(() => {
+    if (!visible) return;
+    setOutcome(initial?.outcome ?? null);
+    setNotes(initial?.notes ?? '');
+    setFollowUpDate(initial?.nextFollowUpAt ? initial.nextFollowUpAt.slice(0, 10) : '');
+  }, [visible, initial]);
 
   const reset = () => {
     setOutcome(null);
@@ -82,7 +101,7 @@ export function AddCallLogModal({ visible, onClose, onSubmit }: Props) {
       <Pressable style={styles.overlay} onPress={handleClose}>
         <Pressable style={styles.sheet} onPress={() => {}}>
           <View style={styles.handle} />
-          <Text style={styles.title}>Log a Call</Text>
+          <Text style={styles.title}>{title}</Text>
 
           <Text style={styles.label}>Outcome *</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.outcomeRow}>
@@ -141,7 +160,7 @@ export function AddCallLogModal({ visible, onClose, onSubmit }: Props) {
               buttonColor={colors.primary}
               style={styles.actionBtn}
             >
-              Log Call
+              {submitLabel}
             </Button>
           </View>
         </Pressable>

@@ -68,6 +68,20 @@ const envSchema = z.object({
   // own limit. Tier 1 target (CFG-1): moves to a platform setting, then to a
   // plan grant. See KNOWN-GAPS 6.9.
   DEFAULT_OWNED_ORGANIZATION_LIMIT: z.coerce.number().int().min(1).max(100).default(3),
+
+  // IANA zone for "today", "tomorrow", date filters and the booking window when
+  // a request does not say where its user is (the app sends X-Timezone).
+  DEFAULT_TIME_ZONE: z
+    .string()
+    .default('Asia/Kolkata')
+    .refine((zone) => {
+      try {
+        new Intl.DateTimeFormat('en-US', { timeZone: zone });
+        return true;
+      } catch {
+        return false;
+      }
+    }, 'Must be an IANA time zone, e.g. Asia/Kolkata'),
   TRIAL_DAYS: z.coerce.number().int().positive().default(14),
 
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),

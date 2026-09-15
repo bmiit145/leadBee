@@ -138,6 +138,196 @@
     "failed": "સંસ્થા બનાવી શકાઈ નહીં",
     "failedMessage": "કંઈક ખોટું થયું. ફરી પ્રયત્ન કરો."
   },
+  "leadWork": {
+    "meetings": "મીટિંગ્સ ({{count}})",
+    "tasks": "કાર્યો ({{count}})",
+    "schedule": "શેડ્યૂલ કરો",
+    "addTask": "કાર્ય ઉમેરો",
+    "noMeetings": "આ લીડ પર હજી કોઈ મીટિંગ નથી.",
+    "noTasks": "આ લીડ પર હજી કોઈ કાર્ય નથી.",
+    "loadFailed": "લોડ થઈ શક્યું નહીં. રિફ્રેશ કરવા નીચે ખેંચો."
+  },
+  "work": {
+    "all": "બધા",
+    "overdue": "મુદત વીતી",
+    "startDate": "શરૂઆતની તારીખ",
+    "endDate": "અંતિમ તારીખ",
+    "startTime": "શરૂઆતનો સમય",
+    "endTime": "અંતિમ સમય",
+    "unknownContact": "અજાણ્યો સંપર્ક",
+    "searchPlaceholder": "ગ્રાહકના નામ અથવા નંબરથી શોધો",
+    "commentCount_one": "{{count}} ટિપ્પણી",
+    "commentCount_other": "{{count}} ટિપ્પણીઓ",
+    "checklistProgress": "{{total}} માંથી {{done}} પૂર્ણ",
+    "commentPlaceholder": "ટિપ્પણી લખો",
+    "commentFailed": "તમારી ટિપ્પણી પોસ્ટ થઈ શકી નહીં.",
+    "errorTitle": "કંઈક ખોટું થયું",
+    "loadFailedTitle": "લોડ થઈ શક્યું નહીં",
+    "loadFailed": "તમારું કનેક્શન તપાસો અને ફરી પ્રયાસ કરવા નીચે ખેંચો.",
+    "cancel": "રદ કરો",
+    "delete": "કાઢી નાખો",
+    "no": "ના",
+    "taskStatus": {
+      "pending": "બાકી",
+      "in_progress": "ચાલુ",
+      "on_hold": "રોકેલું",
+      "in_review": "સમીક્ષામાં",
+      "completed": "પૂર્ણ"
+    },
+    "meetingStatus": {
+      "scheduled": "નિર્ધારિત",
+      "completed": "પૂર્ણ",
+      "cancelled": "રદ",
+      "rescheduled": "ફરી નિર્ધારિત",
+      "missed": "ચૂકી ગયેલ"
+    },
+    "meetingType": {
+      "office_visit": "ઓફિસ મુલાકાત",
+      "site_visit": "સાઇટ મુલાકાત",
+      "client_office": "ક્લાયન્ટની ઓફિસ",
+      "phone_call": "ફોન કૉલ",
+      "google_meet": "Google Meet",
+      "zoom": "Zoom મીટિંગ"
+    },
+    "meetingTabs": {
+      "all": "બધી",
+      "today": "આજે",
+      "tomorrow": "આવતીકાલે",
+      "upcoming": "આગામી",
+      "completed": "પૂર્ણ",
+      "cancelled": "રદ",
+      "rescheduled": "ફરી નિર્ધારિત",
+      "missed": "ચૂકી ગયેલ"
+    },
+    "priority": {
+      "hot": "હોટ",
+      "warm": "વૉર્મ",
+      "cold": "કોલ્ડ"
+    },
+    "role": {
+      "user": "એજન્ટ",
+      "partner": "ભાગીદાર",
+      "manager": "મેનેજર",
+      "admin": "એડમિન",
+      "owner": "માલિક"
+    },
+    "filter": {
+      "title": "ફિલ્ટર",
+      "close": "ફિલ્ટર બંધ કરો",
+      "dateRange": "તારીખ શ્રેણી",
+      "selectDates": "તારીખો પસંદ કરો",
+      "clearDates": "તારીખો સાફ કરો",
+      "meetingType": "મીટિંગનો પ્રકાર",
+      "purpose": "પૂછપરછનો હેતુ",
+      "noPurposes": "હજી કોઈ હેતુ ઉમેરાયો નથી.",
+      "label": "લેબલ",
+      "noLabels": "હજી કોઈ કાર્ય પર લેબલ નથી.",
+      "reset": "રીસેટ",
+      "apply": "લાગુ કરો",
+      "remove": "ફિલ્ટર {{label}} દૂર કરો",
+      "clearAll": "બધું સાફ કરો"
+    },
+    "meetings": {
+      "title": "મીટિંગ્સ",
+      "create": "મીટિંગ બનાવો",
+      "empty": "કોઈ મીટિંગ નથી",
+      "emptyTab": "અત્યારે અહીં કંઈ નથી.",
+      "emptyFiltered": "તમારી શોધ અથવા ફિલ્ટર સાથે કોઈ મીટિંગ મેળ ખાતી નથી."
+    },
+    "tasks": {
+      "title": "બધા કાર્યો",
+      "create": "કાર્ય બનાવો",
+      "mine": "મારા કાર્ય",
+      "assigned": "સોંપેલા કાર્ય",
+      "empty": "કોઈ કાર્ય નથી",
+      "emptyTab": "અત્યારે અહીં કંઈ નથી.",
+      "emptyFiltered": "તમારી શોધ અથવા ફિલ્ટર સાથે કોઈ કાર્ય મેળ ખાતું નથી."
+    },
+    "meeting": {
+      "title": "મીટિંગની વિગતો",
+      "edit": "મીટિંગ સંપાદિત કરો અથવા ફરી નિર્ધારિત કરો",
+      "delete": "મીટિંગ કાઢી નાખો",
+      "deleteConfirm": "આ મીટિંગ અને તેનું ફોલો-અપ કાર્ય કાઢી નાખવું છે?",
+      "deleteFailed": "મીટિંગ કાઢી શકાઈ નહીં.",
+      "updateFailed": "મીટિંગ અપડેટ થઈ શકી નહીં.",
+      "noAccess": "તમને આ મીટિંગની ઍક્સેસ નથી.",
+      "notFound": "મીટિંગ મળી નહીં.",
+      "openLead": "લીડ ખોલો",
+      "copyPhone": "ફોન નંબર કૉપિ કરો",
+      "copied": "કૉપિ થયું",
+      "clientId": "ક્લાયન્ટ ID",
+      "date": "મીટિંગની તારીખ",
+      "purpose": "હેતુ",
+      "source": "સ્રોત",
+      "attendees": "હાજરી આપનાર",
+      "bookedBy": "બુક કરનાર",
+      "whatsapp": "WhatsApp",
+      "call": "કૉલ",
+      "whatsappUnavailable": "WhatsApp ઇન્સ્ટોલ નથી.",
+      "callUnavailable": "આ ઉપકરણથી કૉલ થઈ શકતો નથી.",
+      "statusTab": "સ્થિતિ",
+      "timelineTab": "ટાઇમલાઇન",
+      "missedHint": "આ મીટિંગનો સમય વીતી ગયો છે. તેને પૂર્ણ, ફરી નિર્ધારિત અથવા રદ કરો.",
+      "complete": "મીટિંગ પૂર્ણ કરો",
+      "reschedule": "ફરી નિર્ધારિત કરો",
+      "cancelMeeting": "મીટિંગ રદ કરો",
+      "cancelTitle": "મીટિંગ રદ કરો",
+      "cancelConfirm": "શું તમે ખરેખર આ મીટિંગ રદ કરવા માંગો છો? હાજરી આપનારને જાણ કરવામાં આવશે.",
+      "cancelYes": "હા, રદ કરો",
+      "completeTitle": "મીટિંગ પૂર્ણ કરો",
+      "completeConfirm": "શું તમે ખરેખર આ મીટિંગ પૂર્ણ કરવા માંગો છો?",
+      "outcomePlaceholder": "મીટિંગ કેવી રહી? (વૈકલ્પિક)",
+      "completeYes": "હા, પૂર્ણ કરો",
+      "outcome": "પરિણામ",
+      "notes": "નોંધ",
+      "reopen": "મીટિંગ ફરી ખોલો",
+      "followUpTask": "ફોલો-અપ કાર્ય",
+      "noComments": "હજી કોઈ ટિપ્પણી નથી.",
+      "state": {
+        "scheduled": {
+          "title": "મીટિંગ નિર્ધારિત છે",
+          "message": "{{when}} વાગ્યે શરૂ થશે. પૂરી થયા પછી પૂર્ણ કરો."
+        },
+        "rescheduled": {
+          "title": "મીટિંગ ફરી નિર્ધારિત થઈ",
+          "message": "{{when}} પર ખસેડાઈ. પૂરી થયા પછી પૂર્ણ કરો."
+        },
+        "completed": {
+          "title": "મીટિંગ પૂર્ણ થઈ",
+          "message": "મીટિંગ સફળતાપૂર્વક પૂર્ણ થઈ છે."
+        },
+        "cancelled": {
+          "title": "મીટિંગ રદ થઈ",
+          "message": "આ મીટિંગ રદ કરવામાં આવી હતી."
+        }
+      }
+    },
+    "task": {
+      "title": "કાર્યની વિગતો",
+      "edit": "કાર્ય સંપાદિત કરો",
+      "delete": "કાર્ય કાઢી નાખો",
+      "deleteConfirm": "આ કાર્ય કાઢી નાખવું છે? તે હવે ક્યાંય દેખાશે નહીં.",
+      "deleteFailed": "કાર્ય કાઢી શકાયું નહીં.",
+      "updateFailed": "કાર્ય અપડેટ થઈ શક્યું નહીં.",
+      "noAccess": "તમને આ કાર્યની ઍક્સેસ નથી.",
+      "notFound": "કાર્ય મળ્યું નહીં.",
+      "overdueHint": "અંતિમ તારીખ વીતી ગઈ",
+      "status": "સ્થિતિ",
+      "changeStatus": "સ્થિતિ: {{status}}. બદલવા ટેપ કરો",
+      "lead": "લીડ",
+      "meeting": "મીટિંગ",
+      "commentsTab": "ટિપ્પણીઓ",
+      "membersTab": "સભ્યો",
+      "checklistTab": "ચેકલિસ્ટ",
+      "noComments": "હજી કોઈ ટિપ્પણી નથી.",
+      "noMembers": "આ કાર્ય પર કોઈ નથી.",
+      "noChecklist": "આ કાર્યમાં ચેકલિસ્ટ નથી.",
+      "you": "(તમે)",
+      "creator": "કાર્ય બનાવનાર",
+      "assignee": "સોંપાયેલ",
+      "callMember": "{{name}} ને કૉલ કરો"
+    }
+  },
   "organizations": {
     "title": "સંસ્થાઓ",
     "subtitle": "એક જ પ્રવેશથી, તમે જેમાં છો તે બધી સંસ્થાઓ.",
@@ -329,7 +519,9 @@
     "types": {
       "lead_assigned": "{{actor}} એ લીડ {{subject}} તમને સોંપી",
       "task_assigned": "{{actor}} એ તમને કાર્ય \"{{subject}}\" સોંપ્યું",
-      "meeting_assigned": "{{actor}} એ તમને {{subject}} સાથેની મીટિંગમાં ઉમેર્યા"
+      "meeting_assigned": "{{actor}} એ તમને {{subject}} સાથેની મીટિંગમાં ઉમેર્યા",
+      "meeting_rescheduled": "{{actor}} એ {{subject}} સાથેની તમારી મીટિંગનો સમય બદલ્યો",
+      "meeting_cancelled": "{{actor}} એ {{subject}} સાથેની તમારી મીટિંગ રદ કરી"
     }
   },
   "dropReasons": {

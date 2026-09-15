@@ -73,6 +73,8 @@ export interface IMeeting extends Document {
   outcome?: string;
   createdBy: mongoose.Types.ObjectId;
   isActive: boolean;
+  /** Set when deleting its lead archived it, so restoring the lead brings exactly this back. */
+  archivedWithLead?: boolean;
   createdAt: Date;
   updatedAt: Date;
   readonly endsAt: Date;
@@ -105,6 +107,7 @@ const meetingSchema = new Schema<IMeeting>(
     outcome: { type: String, trim: true },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     isActive: { type: Boolean, default: true },
+    archivedWithLead: { type: Boolean },
   },
   { timestamps: true }
 );

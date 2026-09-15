@@ -41,6 +41,14 @@ const PUSH_COPY: Record<NotificationType, (actorName: string, subject: string) =
     title: 'Meeting scheduled',
     body: `${actorName} added you to a meeting with ${subject}`,
   }),
+  meeting_rescheduled: (actorName, subject) => ({
+    title: 'Meeting rescheduled',
+    body: `${actorName} moved your meeting with ${subject}`,
+  }),
+  meeting_cancelled: (actorName, subject) => ({
+    title: 'Meeting cancelled',
+    body: `${actorName} cancelled your meeting with ${subject}`,
+  }),
 };
 
 export const notificationService = {

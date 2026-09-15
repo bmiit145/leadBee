@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { Project } from '../../models/Project.js';
 import { PurposeOfInquiry } from '../../models/PurposeOfInquiry.js';
+import { Lead } from '../../models/Lead.js';
 import { QuickReply } from '../../models/QuickReply.js';
 import { LeadDropReason } from '../../models/LeadDropReason.js';
 import { AppError } from '../../lib/errors.js';
@@ -226,19 +227,29 @@ export async function lookupRoutes(app: FastifyInstance): Promise<void> {
     schema: {
       tags: ['lookups'],
       summary: 'Rename a meeting purpose (organizers only)',
-      description: 'Meetings reference the purpose by id, so they follow the new name.',
+      description:
+        'Meetings reference the purpose by id, so they follow the new name. Leads ' +
+        'store the name they were given, so they are renamed with it — otherwise ' +
+        'filtering by the new name would miss every older lead.',
       security,
       params: idParam,
       body: purposeBody,
       response: { 200: okEnvelope, ...commonErrors, 409: commonErrors[400] },
     },
     handler: async (request) => {
+      const before = await PurposeOfInquiry.findById(request.params.id).select('name').lean();
+      if (!before) throw AppError.notFound('Purpose not found');
+
       const purpose = await PurposeOfInquiry.findByIdAndUpdate(
         request.params.id,
         { name: request.body.name },
         { new: true, runValidators: true }
       );
       if (!purpose) throw AppError.notFound('Purpose not found');
+
+      if (before.name !== purpose.name) {
+        await Lead.updateMany({ interestedIn: before.name }, { $set: { interestedIn: purpose.name } });
+      }
       return ok(purpose);
     },
   });

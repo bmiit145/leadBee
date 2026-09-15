@@ -3,11 +3,18 @@ import { Lead, type ILead } from '../../models/Lead.js';
 import { CallLog, type ICallLog } from '../../models/CallLog.js';
 import { Organization } from '../../models/Organization.js';
 import { User } from '../../models/User.js';
+import { Task } from '../../models/Task.js';
+import { Meeting } from '../../models/Meeting.js';
+import { LeadDropReason } from '../../models/LeadDropReason.js';
 import { AppError } from '../../lib/errors.js';
 import { nextDisplayNumber } from '../../lib/counters.js';
 import { pageParams } from '../../lib/pagination.js';
 import { requireOrganizationId } from '../../lib/tenantContext.js';
+import { addDays, calendarDayOf, dayBounds, dayRange } from '../../lib/zonedTime.js';
+import { zoneOf } from '../../lib/viewer.js';
 import { notificationService } from '../notifications/notification.service.js';
+import { canSeeLead } from '../work/workAccess.js';
+import { leadThreadService } from './leadThread.service.js';
 import {
   LEAD_STAGE_ORDER,
   TERMINAL_LEAD_STAGES,
@@ -28,6 +35,8 @@ export interface Viewer {
   isOrganizer: boolean;
   name: string;
   role: string;
+  /** IANA zone the caller works in, for "today", "tomorrow" and date filters. */
+  timeZone?: string;
 }
 
 export interface LeadFilters {
@@ -48,16 +57,12 @@ export interface LeadFilters {
   dateTo?: string;
   budgetMin?: number;
   budgetMax?: number;
+  /** Organizers only: soft-deleted leads. */
+  deleted?: boolean;
 }
 
-/** Start and end of a day in server-local time. */
-function dayBounds(base: Date): { start: Date; end: Date } {
-  const start = new Date(base);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(base);
-  end.setHours(23, 59, 59, 999);
-  return { start, end };
-}
+/** A lead as one reader sees it: `isBookmarked` is theirs alone. */
+export type LeadView = Record<string, unknown> & { isBookmarked: boolean };
 
 const POPULATE_LIST = [
   { path: 'assignedTo', select: 'name phone role avatarUrl' },
@@ -71,6 +76,56 @@ const POPULATE_DETAIL = [
   { path: 'createdBy', select: 'name role avatarUrl' },
   { path: 'project', select: 'name color' },
 ] as const;
+
+/** "follow_up" → "Follow Up", for activity text. */
+const stageLabel = (stage: string) =>
+  stage
+    .split('_')
+    .map((word) => (word ? word[0]!.toUpperCase() + word.slice(1) : word))
+    .join(' ');
+
+/**
+ * Replaces the stored `bookmarkedBy` list with the reader's own `isBookmarked`.
+ * Who else bookmarked a lead is nobody's business, and the list grows with the team.
+ */
+export function presentLead(
+  lead: Record<string, unknown>,
+  viewer: Pick<Viewer, 'userId'>
+): LeadView {
+  const { bookmarkedBy, isBookmarked: _legacy, ...rest } = lead;
+  const uid = viewer.userId.toString();
+  const marked = Array.isArray(bookmarkedBy)
+    ? bookmarkedBy.some((id) => String(id) === uid)
+    : false;
+  return { ...rest, isBookmarked: marked };
+}
+
+function presentDoc(lead: ILead, viewer: Viewer): LeadView {
+  return presentLead(lead.toJSON() as Record<string, unknown>, viewer);
+}
+
+/** Throws 404 when the lead does not exist (or is deleted), 403 when it is not this agent's. */
+export async function findVisibleLead(
+  leadId: string | Types.ObjectId,
+  viewer: Viewer
+): Promise<ILead> {
+  if (!Types.ObjectId.isValid(String(leadId))) throw AppError.notFound('Lead not found');
+  const lead = await Lead.findOne({ _id: leadId, isActive: true });
+  if (!lead) throw AppError.notFound('Lead not found');
+  if (!canSeeLead(lead, viewer)) throw AppError.forbidden('Access denied');
+  return lead;
+}
+
+export async function leadIsVisible(
+  leadId: string | Types.ObjectId,
+  viewer: Viewer
+): Promise<boolean> {
+  if (!Types.ObjectId.isValid(String(leadId))) return false;
+  const lead = await Lead.findOne({ _id: leadId, isActive: true })
+    .select('assignedTo createdBy')
+    .lean();
+  return !!lead && canSeeLead(lead, viewer);
+}
 
 export const leadService = {
   /**
@@ -90,7 +145,7 @@ export const leadService = {
     }
   },
 
-  async create(data: Record<string, unknown>, viewer: Viewer): Promise<ILead> {
+  async create(data: Record<string, unknown>, viewer: Viewer): Promise<LeadView> {
     const organizationId = requireOrganizationId();
 
     // A lead nobody owns is a lead nobody works. Default to the creator.
@@ -98,7 +153,17 @@ export const leadService = {
     const requested = data.assignedTo as string | undefined;
     leadService.assertMayAssignOnCreate(requested, viewer);
     if (requested && requested !== viewer.userId.toString()) {
-      assignedTo = await assertAssignable(requested);
+      assignedTo = (await assertAssignable(requested))._id;
+    }
+
+    // The form lets a lead start at any stage — one that arrives already
+    // qualified is not "new". A drop still needs its reason.
+    const stage = (data.stage as LeadStage | undefined) ?? 'new';
+    const lostReason = typeof data.lostReason === 'string' ? data.lostReason.trim() : '';
+    if (stage === 'drop' && !lostReason) throw lostReasonRequired();
+
+    if (data.allowDuplicate !== true) {
+      await assertNotDuplicate(data.contactPhone as string, viewer);
     }
 
     // Validated before the number is taken, so a refused create does not burn
@@ -106,6 +171,10 @@ export const leadService = {
     const leadNumber = await nextDisplayNumber('lead');
     const lead = await Lead.create({
       ...sanitize(data),
+      stage,
+      ...(stage === 'drop'
+        ? { lostReason, dropReason: await matchDropReason(lostReason) }
+        : {}),
       leadNumber,
       createdBy: viewer.userId,
       assignedTo,
@@ -128,11 +197,29 @@ export const leadService = {
       subject: lead.contactName,
     });
 
-    return lead.populate(POPULATE_LIST as unknown as string[]);
+    await leadThreadService.recordActivity(
+      lead._id,
+      'lead_created',
+      stage === 'new'
+        ? `Lead created by ${viewer.name}`
+        : `Lead created by ${viewer.name} at ${stageLabel(stage)}`,
+      viewer,
+      { stage }
+    );
+
+    await lead.populate(POPULATE_LIST as unknown as string[]);
+    return presentDoc(lead, viewer);
   },
 
   async list(filters: LeadFilters, viewer: Viewer) {
     const query: FilterQuery<ILead> = { isActive: true };
+    const timeZone = zoneOf(viewer);
+
+    if (filters.deleted) {
+      // Restoring is an organizer's call, so only they browse what was deleted.
+      if (!viewer.isOrganizer) throw AppError.forbidden('Only organizers can see deleted leads');
+      query.isActive = false;
+    }
 
     if (!viewer.isOrganizer) {
       // An agent's list is their own book. `$or` rather than `assignedTo` alone
@@ -156,30 +243,26 @@ export const leadService = {
       query.stage = { $nin: TERMINAL_LEAD_STAGES };
     }
 
-    if (filters.bookmarked) query.isBookmarked = true;
+    // A person's own shortcut list — not everyone's.
+    if (filters.bookmarked) query.bookmarkedBy = viewer.userId;
 
     if (filters.reminderScope) {
       query.stage = { $nin: TERMINAL_LEAD_STAGES };
       if (filters.reminderScope === 'overdue') {
         query.nextFollowUpAt = { $lt: new Date(), $ne: null };
       } else {
-        const base = new Date();
-        if (filters.reminderScope === 'tomorrow') base.setDate(base.getDate() + 1);
-        const { start, end } = dayBounds(base);
+        // "Today" is the user's day, not the server's.
+        const today = calendarDayOf(new Date(), timeZone);
+        const { start, end } = dayBounds(
+          filters.reminderScope === 'tomorrow' ? addDays(today, 1) : today,
+          timeZone
+        );
         query.nextFollowUpAt = { $gte: start, $lte: end };
       }
     }
 
-    if (filters.dateFrom || filters.dateTo) {
-      const range: Record<string, Date> = {};
-      if (filters.dateFrom) range.$gte = new Date(filters.dateFrom);
-      if (filters.dateTo) {
-        const end = new Date(filters.dateTo);
-        end.setHours(23, 59, 59, 999);
-        range.$lte = end;
-      }
-      query.createdAt = range;
-    }
+    const created = safeDayRange(filters.dateFrom, filters.dateTo, timeZone);
+    if (created) query.createdAt = created;
 
     // "Budget between X and Y" means the lead's range overlaps the filter's,
     // not that its endpoints sit inside it.
@@ -203,7 +286,7 @@ export const leadService = {
 
     const { page, limit, skip } = pageParams(filters);
 
-    const [data, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       Lead.find(query)
         .populate(POPULATE_LIST as unknown as string[])
         .sort({ createdAt: -1 })
@@ -213,33 +296,31 @@ export const leadService = {
       Lead.countDocuments(query),
     ]);
 
+    const data = rows.map((row) => presentLead(row as unknown as Record<string, unknown>, viewer));
     return { data, total, page, limit };
   },
 
-  async getById(leadId: string, viewer: Viewer): Promise<ILead> {
+  async getById(leadId: string, viewer: Viewer): Promise<LeadView> {
     const lead = await Lead.findOne({ _id: leadId, isActive: true }).populate(
       POPULATE_DETAIL as unknown as string[]
     );
     if (!lead) throw AppError.notFound('Lead not found');
-    assertCanSee(lead, viewer);
-    return lead;
+    if (!canSeeLead(lead, viewer)) throw AppError.forbidden('Access denied');
+    return presentDoc(lead, viewer);
   },
 
   async update(
     leadId: string,
     data: Record<string, unknown>,
     viewer: Viewer
-  ): Promise<ILead> {
-    const lead = await Lead.findOne({ _id: leadId, isActive: true });
-    if (!lead) throw AppError.notFound('Lead not found');
-    assertCanSee(lead, viewer);
-
+  ): Promise<LeadView> {
+    const lead = await findVisibleLead(leadId, viewer);
     const safe = sanitize(data);
 
-    // `assignedTo` is accepted here for the organizer's edit form, but it is
-    // still assignment: without this check the generic update was a way round
-    // the organizer-only /assign endpoint for any agent.
-    let reassignedTo: Types.ObjectId | undefined;
+    // `assignedTo` is accepted here for the edit form, but it is still
+    // assignment: without this check the generic update was a way round the
+    // organizer-only /assign endpoint for any agent.
+    let reassignedTo: { _id: Types.ObjectId; name: string } | undefined;
     if (safe.assignedTo !== undefined) {
       const requested = String(safe.assignedTo);
       if (requested !== lead.assignedTo?.toString()) {
@@ -251,25 +332,36 @@ export const leadService = {
       delete safe.assignedTo;
     }
 
+    // Changing the number to one another lead already has is the same
+    // duplicate as creating it.
+    if (
+      typeof safe.contactPhone === 'string' &&
+      safe.contactPhone !== lead.contactPhone &&
+      data.allowDuplicate !== true
+    ) {
+      await assertNotDuplicate(safe.contactPhone, viewer, lead._id);
+    }
+
+    // The reason can be corrected while the lead is dropped; it means nothing otherwise.
+    if (typeof data.lostReason === 'string' && lead.stage === 'drop') {
+      const reason = data.lostReason.trim();
+      if (!reason) throw lostReasonRequired();
+      lead.lostReason = reason;
+      lead.dropReason = await matchDropReason(reason);
+    }
+
     Object.assign(lead, safe);
     if (reassignedTo) {
-      lead.assignedTo = reassignedTo;
+      lead.assignedTo = reassignedTo._id;
       lead.assignedBy = viewer.userId;
       lead.assignedAt = new Date();
     }
     await lead.save();
 
-    if (reassignedTo) {
-      await notificationService.notify({
-        type: 'lead_assigned',
-        recipients: [reassignedTo],
-        actor: viewer,
-        entityId: lead._id,
-        subject: lead.contactName,
-      });
-    }
+    if (reassignedTo) await announceReassignment(lead, reassignedTo, viewer);
 
-    return lead.populate(POPULATE_LIST as unknown as string[]);
+    await lead.populate(POPULATE_LIST as unknown as string[]);
+    return presentDoc(lead, viewer);
   },
 
   /**
@@ -286,10 +378,8 @@ export const leadService = {
       nextFollowUpAt?: Date | null;
       reminderMinutesBefore?: number[];
     } = {}
-  ): Promise<ILead> {
-    const lead = await Lead.findOne({ _id: leadId, isActive: true });
-    if (!lead) throw AppError.notFound('Lead not found');
-    assertCanSee(lead, viewer);
+  ): Promise<LeadView> {
+    const lead = await findVisibleLead(leadId, viewer);
 
     const allowed = VALID_LEAD_STAGE_TRANSITIONS[lead.stage] ?? [];
     if (!allowed.includes(newStage)) {
@@ -306,63 +396,126 @@ export const leadService = {
       lead.reminderMinutesBefore = options.reminderMinutesBefore;
     }
 
+    // A dropped lead nobody can explain is a lead nobody learns from.
+    const reason = options.lostReason?.trim();
+    if (newStage === 'drop') {
+      if (!reason) throw lostReasonRequired();
+      lead.lostReason = reason;
+      lead.dropReason = await matchDropReason(reason);
+    } else if (lead.stage === 'drop') {
+      // Reopened: the old reason no longer describes it.
+      lead.lostReason = undefined;
+      lead.dropReason = undefined;
+    }
+
+    const previous = lead.stage;
     lead.stage = newStage;
-    if (newStage === 'drop' && options.lostReason) lead.lostReason = options.lostReason;
     await lead.save();
-    return lead.populate(POPULATE_LIST as unknown as string[]);
+
+    await leadThreadService.recordActivity(
+      lead._id,
+      'stage_changed',
+      `${viewer.name} moved the lead from ${stageLabel(previous)} to ${stageLabel(newStage)}` +
+        (newStage === 'drop' && reason ? ` — ${reason}` : ''),
+      viewer,
+      { from: previous, to: newStage }
+    );
+
+    await lead.populate(POPULATE_LIST as unknown as string[]);
+    return presentDoc(lead, viewer);
   },
 
-  async assign(
-    leadId: string,
-    assignToUserId: string,
-    viewer: Viewer
-  ): Promise<ILead> {
+  async assign(leadId: string, assignToUserId: string, viewer: Viewer): Promise<LeadView> {
     const lead = await Lead.findOne({ _id: leadId, isActive: true });
     if (!lead) throw AppError.notFound('Lead not found');
 
     const assignee = await assertAssignable(assignToUserId);
-    const isChange = !lead.assignedTo?.equals(assignee);
+    const isChange = !lead.assignedTo?.equals(assignee._id);
 
-    lead.assignedTo = assignee;
+    lead.assignedTo = assignee._id;
     lead.assignedBy = viewer.userId;
     lead.assignedAt = new Date();
     await lead.save();
 
-    if (isChange) {
-      await notificationService.notify({
-        type: 'lead_assigned',
-        recipients: [assignee],
-        actor: viewer,
-        entityId: lead._id,
-        subject: lead.contactName,
-      });
-    }
+    if (isChange) await announceReassignment(lead, assignee, viewer);
 
-    return lead.populate(POPULATE_LIST as unknown as string[]);
+    await lead.populate(POPULATE_LIST as unknown as string[]);
+    return presentDoc(lead, viewer);
   },
 
-  /** The bookmark quick-action — a single-field toggle, not a general update. */
-  async toggleBookmark(leadId: string, viewer: Viewer): Promise<ILead> {
-    const lead = await Lead.findOne({ _id: leadId, isActive: true });
-    if (!lead) throw AppError.notFound('Lead not found');
-    assertCanSee(lead, viewer);
-
-    lead.isBookmarked = !lead.isBookmarked;
-    await lead.save();
-    return lead;
+  /** The bookmark quick-action — the reader's own flag, toggled atomically. */
+  async toggleBookmark(leadId: string, viewer: Viewer): Promise<LeadView> {
+    const lead = await findVisibleLead(leadId, viewer);
+    const marked = lead.bookmarkedBy.some((id) => id.equals(viewer.userId));
+    await Lead.updateOne(
+      { _id: lead._id },
+      marked
+        ? { $pull: { bookmarkedBy: viewer.userId } }
+        : { $addToSet: { bookmarkedBy: viewer.userId } }
+    );
+    return leadService.getById(leadId, viewer);
   },
 
-  /** Soft delete — the lead's call history and threads stay referentially intact. */
+  /**
+   * Soft delete. The lead's tasks and meetings are archived with it — left
+   * active, they stayed in lists and on the calendar pointing at a lead nobody
+   * could open. They are marked, so a restore brings back exactly these and not
+   * something a person closed on purpose.
+   */
   async remove(leadId: string): Promise<void> {
-    const lead = await Lead.findById(leadId);
+    const lead = await Lead.findOne({ _id: leadId, isActive: true });
     if (!lead) throw AppError.notFound('Lead not found');
     lead.isActive = false;
     await lead.save();
+
+    await Promise.all([
+      Task.updateMany(
+        { leadId: lead._id, isActive: true },
+        { $set: { isActive: false, archivedWithLead: true } }
+      ),
+      Meeting.updateMany(
+        { leadId: lead._id, isActive: true },
+        { $set: { isActive: false, archivedWithLead: true } }
+      ),
+    ]);
 
     void Organization.updateOne(
       { _id: requireOrganizationId() },
       { $inc: { 'usage.leads': -1 } }
     ).catch(() => undefined);
+  },
+
+  /** Undo a delete: the lead, and the work that was archived with it. */
+  async restore(leadId: string, viewer: Viewer): Promise<LeadView> {
+    const lead = await Lead.findOne({ _id: leadId, isActive: false });
+    if (!lead) throw AppError.notFound('Deleted lead not found');
+    lead.isActive = true;
+    await lead.save();
+
+    await Promise.all([
+      Task.updateMany(
+        { leadId: lead._id, archivedWithLead: true },
+        { $set: { isActive: true }, $unset: { archivedWithLead: 1 } }
+      ),
+      Meeting.updateMany(
+        { leadId: lead._id, archivedWithLead: true },
+        { $set: { isActive: true }, $unset: { archivedWithLead: 1 } }
+      ),
+    ]);
+
+    void Organization.updateOne(
+      { _id: requireOrganizationId() },
+      { $inc: { 'usage.leads': 1 } }
+    ).catch(() => undefined);
+
+    await leadThreadService.recordActivity(
+      lead._id,
+      'lead_restored',
+      `${viewer.name} restored the lead`,
+      viewer
+    );
+
+    return leadService.getById(leadId, viewer);
   },
 
   async addCallLog(
@@ -376,12 +529,10 @@ export const leadService = {
     },
     viewer: Viewer
   ): Promise<ICallLog> {
-    const lead = await Lead.findOne({ _id: leadId, isActive: true });
-    if (!lead) throw AppError.notFound('Lead not found');
-    assertCanSee(lead, viewer);
+    const lead = await findVisibleLead(leadId, viewer);
 
     const callLog = await CallLog.create({
-      leadId: new Types.ObjectId(leadId),
+      leadId: lead._id,
       calledBy: viewer.userId,
       calledByName: viewer.name,
       calledByRole: viewer.role,
@@ -392,39 +543,84 @@ export const leadService = {
       nextFollowUpAt: data.nextFollowUpAt,
     });
 
-    // Denormalised onto the lead so the list can show last-contact without a
-    // second query per row.
-    lead.callCount = (lead.callCount ?? 0) + 1;
-    lead.lastContactedAt = callLog.calledAt;
-    lead.latestCallLog = {
-      _id: callLog._id.toString(),
-      outcome: callLog.outcome,
-      calledAt: callLog.calledAt,
-      calledByName: callLog.calledByName,
-      notes: callLog.notes,
-    };
-    if (data.nextFollowUpAt) lead.nextFollowUpAt = data.nextFollowUpAt;
-    await lead.save();
+    if (data.nextFollowUpAt) {
+      await Lead.updateOne({ _id: lead._id }, { $set: { nextFollowUpAt: data.nextFollowUpAt } });
+    }
+    await refreshCallSummary(lead._id);
+
+    await leadThreadService.recordActivity(
+      lead._id,
+      'call_logged',
+      `${viewer.name} logged a call: ${stageLabel(callLog.outcome)}` +
+        (callLog.notes ? ` — ${callLog.notes}` : ''),
+      viewer,
+      { callLogId: callLog._id.toString(), outcome: callLog.outcome }
+    );
 
     return callLog;
   },
 
-  async listCallLogs(leadId: string, viewer: Viewer, page = 1, limit = 20) {
-    const lead = await Lead.findOne({ _id: leadId, isActive: true }).select(
-      'assignedTo createdBy'
+  /** Correcting a call: its author, or an organizer. */
+  async updateCallLog(
+    leadId: string,
+    callLogId: string,
+    data: {
+      outcome?: string;
+      duration?: number;
+      calledAt?: Date;
+      notes?: string;
+      nextFollowUpAt?: Date;
+    },
+    viewer: Viewer
+  ): Promise<ICallLog> {
+    const lead = await findVisibleLead(leadId, viewer);
+    const callLog = await findOwnCallLog(lead._id, callLogId, viewer, 'change');
+
+    if (data.outcome !== undefined) callLog.set('outcome', data.outcome);
+    if (data.duration !== undefined) callLog.duration = data.duration;
+    if (data.calledAt !== undefined) callLog.calledAt = data.calledAt;
+    if (data.notes !== undefined) callLog.notes = data.notes || undefined;
+    if (data.nextFollowUpAt !== undefined) callLog.nextFollowUpAt = data.nextFollowUpAt;
+    await callLog.save();
+
+    await refreshCallSummary(lead._id);
+    await leadThreadService.recordActivity(
+      lead._id,
+      'call_updated',
+      `${viewer.name} corrected a call to ${stageLabel(callLog.outcome)}`,
+      viewer,
+      { callLogId: callLog._id.toString() }
     );
-    if (!lead) throw AppError.notFound('Lead not found');
-    assertCanSee(lead, viewer);
+    return callLog;
+  },
+
+  async removeCallLog(leadId: string, callLogId: string, viewer: Viewer): Promise<void> {
+    const lead = await findVisibleLead(leadId, viewer);
+    const callLog = await findOwnCallLog(lead._id, callLogId, viewer, 'delete');
+    await callLog.deleteOne();
+
+    await refreshCallSummary(lead._id);
+    await leadThreadService.recordActivity(
+      lead._id,
+      'call_deleted',
+      `${viewer.name} deleted a logged call`,
+      viewer,
+      { callLogId }
+    );
+  },
+
+  async listCallLogs(leadId: string, viewer: Viewer, page = 1, limit = 20) {
+    const lead = await findVisibleLead(leadId, viewer);
 
     const params = pageParams({ page, limit });
     const [data, total] = await Promise.all([
-      CallLog.find({ leadId: new Types.ObjectId(leadId) })
+      CallLog.find({ leadId: lead._id })
         .populate('calledBy', 'name role avatarUrl')
         .sort({ calledAt: -1 })
         .skip(params.skip)
         .limit(params.limit)
         .lean(),
-      CallLog.countDocuments({ leadId: new Types.ObjectId(leadId) }),
+      CallLog.countDocuments({ leadId: lead._id }),
     ]);
 
     return { data, total, page: params.page, limit: params.limit };
@@ -488,23 +684,140 @@ export const leadService = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function lostReasonRequired(): AppError {
+  return new AppError(
+    'Say why the lead is being dropped — pick a drop reason or write one.',
+    400,
+    'LOST_REASON_REQUIRED'
+  );
+}
+
+/** Date filters are the user's days; an unreadable one is a 400, not a 500. */
+function safeDayRange(from: string | undefined, to: string | undefined, timeZone: string) {
+  try {
+    return dayRange(from, to, timeZone);
+  } catch (error) {
+    throw AppError.badRequest(error instanceof Error ? error.message : 'Invalid date filter');
+  }
+}
+
 /**
- * An agent may only touch a lead assigned to or created by them. Organizers see
- * everything in their organization.
- *
- * This is *within*-tenant authorization. Cross-tenant isolation is already
- * guaranteed by the tenant plugin before this ever runs — a lead from another
- * organization is not found at all, so this never sees one.
+ * The organization's drop tag a reason names. The app writes "Tag — note" when
+ * both are given, so a reason matches a tag when it is the tag, or starts with it.
  */
-function assertCanSee(
-  lead: Pick<ILead, 'assignedTo' | 'createdBy'>,
+async function matchDropReason(reason: string): Promise<Types.ObjectId | undefined> {
+  const tags = await LeadDropReason.find({}).select('name').lean<{ _id: Types.ObjectId; name: string }[]>();
+  const tag = tags.find((t) => reason === t.name || reason.startsWith(`${t.name} — `));
+  return tag?._id;
+}
+
+/**
+ * One phone number, one live lead — unless the person, having been told, says
+ * otherwise. The answer names the existing lead only as far as the asker may
+ * see it: its number always, its contact and id only when it is theirs.
+ */
+async function assertNotDuplicate(
+  phone: string,
+  viewer: Viewer,
+  excludeLeadId?: Types.ObjectId
+): Promise<void> {
+  if (!phone) return;
+  const existing = await Lead.findOne({
+    isActive: true,
+    $or: [{ contactPhone: phone }, { contactSecondPhone: phone }],
+    ...(excludeLeadId ? { _id: { $ne: excludeLeadId } } : {}),
+  })
+    .select('leadNumber contactName assignedTo createdBy')
+    .lean<{
+      _id: Types.ObjectId;
+      leadNumber: string;
+      contactName: string;
+      assignedTo?: Types.ObjectId;
+      createdBy: Types.ObjectId;
+    }>();
+  if (!existing) return;
+
+  const visible = canSeeLead(existing, viewer);
+  const owner = existing.assignedTo
+    ? await User.findById(existing.assignedTo).select('name').lean<{ name: string }>()
+    : null;
+
+  throw new AppError(
+    `A lead with this phone number already exists (${existing.leadNumber}).`,
+    409,
+    'DUPLICATE_LEAD',
+    {
+      leadNumber: existing.leadNumber,
+      assignedToName: owner?.name,
+      ...(visible ? { leadId: existing._id.toString(), contactName: existing.contactName } : {}),
+    }
+  );
+}
+
+async function announceReassignment(
+  lead: ILead,
+  assignee: { _id: Types.ObjectId; name: string },
   viewer: Viewer
-): void {
-  if (viewer.isOrganizer) return;
-  const uid = viewer.userId.toString();
-  const isOwner =
-    lead.assignedTo?.toString() === uid || lead.createdBy?.toString() === uid;
-  if (!isOwner) throw AppError.forbidden('Access denied');
+): Promise<void> {
+  await notificationService.notify({
+    type: 'lead_assigned',
+    recipients: [assignee._id],
+    actor: viewer,
+    entityId: lead._id,
+    subject: lead.contactName,
+  });
+  await leadThreadService.recordActivity(
+    lead._id,
+    'lead_reassigned',
+    `${viewer.name} assigned the lead to ${assignee.name}`,
+    viewer,
+    { assignedTo: assignee._id.toString() }
+  );
+}
+
+async function findOwnCallLog(
+  leadId: Types.ObjectId,
+  callLogId: string,
+  viewer: Viewer,
+  verb: 'change' | 'delete'
+) {
+  if (!Types.ObjectId.isValid(callLogId)) throw AppError.notFound('Call log not found');
+  const callLog = await CallLog.findOne({ _id: callLogId, leadId });
+  if (!callLog) throw AppError.notFound('Call log not found');
+  if (!viewer.isOrganizer && !callLog.calledBy.equals(viewer.userId)) {
+    throw AppError.forbidden(`You can only ${verb} calls you logged`);
+  }
+  return callLog;
+}
+
+/**
+ * Recomputes the lead's denormalised call count and last call from the call
+ * logs themselves, so adding, correcting and deleting a call all leave it true.
+ */
+async function refreshCallSummary(leadId: Types.ObjectId): Promise<void> {
+  const [count, latest] = await Promise.all([
+    CallLog.countDocuments({ leadId }),
+    CallLog.findOne({ leadId }).sort({ calledAt: -1 }).lean(),
+  ]);
+
+  await Lead.updateOne(
+    { _id: leadId },
+    latest
+      ? {
+          $set: {
+            callCount: count,
+            lastContactedAt: latest.calledAt,
+            latestCallLog: {
+              _id: latest._id.toString(),
+              outcome: latest.outcome,
+              calledAt: latest.calledAt,
+              calledByName: latest.calledByName,
+              notes: latest.notes,
+            },
+          },
+        }
+      : { $set: { callCount: 0 }, $unset: { latestCallLog: 1 } }
+  );
 }
 
 /**
@@ -512,23 +825,29 @@ function assertCanSee(
  * tenant-scoped by the plugin, so another tenant's user id is simply not found;
  * a deactivated user would otherwise collect leads nobody can see.
  */
-async function assertAssignable(userId: string): Promise<Types.ObjectId> {
-  const user = await User.findOne({ _id: userId, isActive: true }).select('_id').lean();
+async function assertAssignable(userId: string): Promise<{ _id: Types.ObjectId; name: string }> {
+  const user = Types.ObjectId.isValid(userId)
+    ? await User.findOne({ _id: userId, isActive: true })
+        .select('_id name')
+        .lean<{ _id: Types.ObjectId; name: string }>()
+    : null;
   if (!user) {
     throw AppError.badRequest('The assignee must be an active member of this organization');
   }
-  return user._id;
+  return user;
 }
 
 /**
  * Strip fields a client must never set directly. Server-owned bookkeeping
- * (`leadNumber`, `callCount`, `latestCallLog`) and anything with its own guarded
- * endpoint (`stage`).
+ * (`leadNumber`, `callCount`, `latestCallLog`, bookmarks) and anything handled
+ * explicitly (`stage`, `lostReason`).
  */
 function sanitize(data: Record<string, unknown>): Record<string, unknown> {
   const {
     leadNumber: _leadNumber,
     stage: _stage,
+    lostReason: _lostReason,
+    dropReason: _dropReason,
     createdBy: _createdBy,
     callCount: _callCount,
     latestCallLog: _latestCallLog,
@@ -536,10 +855,14 @@ function sanitize(data: Record<string, unknown>): Record<string, unknown> {
     isActive: _isActive,
     assignedBy: _assignedBy,
     assignedAt: _assignedAt,
+    bookmarkedBy: _bookmarkedBy,
+    isBookmarked: _isBookmarked,
+    allowDuplicate: _allowDuplicate,
     ...safe
   } = data;
 
   if (safe.contactEmail === '') delete safe.contactEmail;
+  if (safe.contactSecondPhone === '') safe.contactSecondPhone = undefined;
   if (typeof safe.nextFollowUpAt === 'string') {
     safe.nextFollowUpAt = new Date(safe.nextFollowUpAt);
   }

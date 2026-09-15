@@ -6,6 +6,7 @@ import { Lead } from '../types';
 import { colors, spacing, borderRadius } from '../theme';
 import { LEAD_STAGE_META } from '../config/leadStages';
 import { StatusChip, Avatar } from './ui';
+import { formatBudget, sourceLabel } from '../utils/workFormat';
 
 interface Props {
   lead: Lead;
@@ -62,24 +63,6 @@ export function LeadSummaryCard({ lead }: Props) {
       </View>
     </View>
   );
-}
-
-/** "walk_in" -> "Walk In", "99acres" -> "99ACRES". */
-function sourceLabel(source: string): string {
-  return source
-    .split('_')
-    .map((w) => (w.length <= 3 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
-    .join(' ');
-}
-
-/** Compact ₹ label, e.g. 1500000 -> "₹15L". Returns null when no budget is set. */
-function formatBudget(min?: number, max?: number): string | null {
-  const value = max ?? min;
-  if (!value || value <= 0) return null;
-  if (value >= 10_000_000) return `₹${+(value / 10_000_000).toFixed(2)}Cr`;
-  if (value >= 100_000) return `₹${+(value / 100_000).toFixed(2)}L`;
-  if (value >= 1_000) return `₹${+(value / 1_000).toFixed(2)}K`;
-  return `₹${value}`;
 }
 
 const styles = StyleSheet.create({

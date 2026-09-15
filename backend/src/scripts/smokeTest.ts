@@ -10,9 +10,29 @@ import { PurposeOfInquiry } from '../models/PurposeOfInquiry.js';
 import { Account } from '../models/Account.js';
 import { Role } from '../models/Role.js';
 import { AuditLog } from '../models/AuditLog.js';
+import { Task } from '../models/Task.js';
+import { Meeting } from '../models/Meeting.js';
+import { CallLog } from '../models/CallLog.js';
+import { LeadThreadItem } from '../models/LeadThreadItem.js';
 import { LEAD_STAGE_ORDER } from '../config/constants.js';
 import { withoutTenantScope } from '../lib/tenantContext.js';
+import { isValidMobilePhone } from '../lib/phone.js';
 import '../models/index.js';
+
+/**
+ * A valid Indian mobile number starting with `lead`, unique to this run.
+ * Clock digits alone can land in an unallocated range — a 64… number is not a
+ * mobile — which failed registration and provisioning checks that had nothing
+ * to do with phone numbers.
+ */
+function smokeMobile(lead: string, seed: number): string {
+  const tail = String(seed).padStart(8, '0').slice(-8);
+  for (const second of '9876543210') {
+    const candidate = `${lead}${second}${tail}`;
+    if (isValidMobilePhone(candidate)) return candidate;
+  }
+  return `${lead}9${tail}`;
+}
 
 /**
  * End-to-end smoke test against a live database, driven through Fastify's
@@ -459,6 +479,523 @@ async function main(): Promise<void> {
   });
   check('Agent cannot reorder meeting purposes', agentReorder.statusCode === 403, agentReorder.statusCode);
 
+  // ─── LEADS, TASKS AND MEETINGS ──────────────────────────────────────────────
+  section('Leads, tasks and meetings');
+
+  const workLeadIds: string[] = [leadId];
+  const workTaskIds: string[] = [];
+  const workStamp = Number(Date.now().toString().slice(-8));
+  const workPhone = (n: number) => `9${String(workStamp + n).padStart(9, '0').slice(-9)}`;
+  const agentName = agentLogin.json()?.data?.user?.name as string;
+
+  // Times are the user's: the app sends its zone, and the API computes days in it.
+  const TIME_ZONE = 'Asia/Kolkata';
+  const zoned = { 'x-timezone': TIME_ZONE };
+  const indiaDay = (offsetDays: number) =>
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: TIME_ZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(Date.now() + offsetDays * 86_400_000));
+  const indiaAt = (day: string, hh: number, mm: number) =>
+    new Date(`${day}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00+05:30`).toISOString();
+  const inject = (
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+    url: string,
+    headers: Record<string, string>,
+    payload?: Record<string, unknown>
+  ) => app.inject({ method, url, headers: { ...headers, ...zoned }, ...(payload ? { payload } : {}) });
+
+  // Lead creation keeps the stage picked on the form.
+  const stagedLead = await inject('POST', '/api/v1/leads', ownerAuth, {
+    contactName: 'Smoke Qualified',
+    contactPhone: workPhone(1),
+    stage: 'qualified',
+  });
+  const stagedLeadId = stagedLead.json()?.data?._id as string;
+  workLeadIds.push(stagedLeadId);
+  check(
+    'A lead starts at the stage picked on the form',
+    stagedLead.statusCode === 201 && stagedLead.json()?.data?.stage === 'qualified',
+    stagedLead.json()
+  );
+
+  const duplicate = await inject('POST', '/api/v1/leads', ownerAuth, {
+    contactName: 'Smoke Duplicate',
+    contactPhone: workPhone(1),
+  });
+  check(
+    'A second lead with the same phone is flagged as a duplicate',
+    duplicate.statusCode === 409 &&
+      duplicate.json()?.error?.code === 'DUPLICATE_LEAD' &&
+      duplicate.json()?.error?.details?.leadNumber === stagedLead.json()?.data?.leadNumber,
+    duplicate.json()
+  );
+
+  const duplicateAllowed = await inject('POST', '/api/v1/leads', ownerAuth, {
+    contactName: 'Smoke Duplicate',
+    contactPhone: workPhone(1),
+    allowDuplicate: true,
+  });
+  workLeadIds.push(duplicateAllowed.json()?.data?._id);
+  check('A flagged duplicate can still be created on purpose', duplicateAllowed.statusCode === 201, duplicateAllowed.statusCode);
+
+  const edited = await inject('PUT', `/api/v1/leads/${stagedLeadId}`, ownerAuth, {
+    contactName: 'Smoke Qualified Edited',
+  });
+  check(
+    'Editing a lead changes that lead instead of creating another',
+    edited.statusCode === 200 &&
+      edited.json()?.data?._id === stagedLeadId &&
+      edited.json()?.data?.contactName === 'Smoke Qualified Edited',
+    edited.json()
+  );
+
+  const dropWithoutReason = await inject('PUT', `/api/v1/leads/${stagedLeadId}/stage`, ownerAuth, {
+    stage: 'drop',
+  });
+  check(
+    'Dropping a lead needs a reason',
+    dropWithoutReason.statusCode === 400 &&
+      dropWithoutReason.json()?.error?.code === 'LOST_REASON_REQUIRED',
+    dropWithoutReason.json()
+  );
+
+  const dropped = await inject('PUT', `/api/v1/leads/${stagedLeadId}/stage`, ownerAuth, {
+    stage: 'drop',
+    lostReason: `${dropReasonName} — smoke`,
+  });
+  check(
+    'A drop reason that names a drop tag is linked to it',
+    dropped.statusCode === 200 && String(dropped.json()?.data?.dropReason) === dropReasonId,
+    dropped.json()?.data
+  );
+
+  const stagedTimeline = await inject('GET', `/api/v1/leads/${stagedLeadId}/thread?channel=timeline`, ownerAuth);
+  const stageActivity = (stagedTimeline.json()?.data ?? []).find(
+    (item: { kind?: string; event?: string }) => item.kind === 'activity' && item.event === 'stage_changed'
+  ) as { _id: string } | undefined;
+  check('A stage change is written to the lead’s timeline', Boolean(stageActivity), stagedTimeline.json()?.data?.length);
+
+  const deleteActivity = await inject(
+    'DELETE',
+    `/api/v1/leads/${stagedLeadId}/thread/${stageActivity?._id}`,
+    ownerAuth
+  );
+  check('Timeline activity cannot be deleted', deleteActivity.statusCode === 403, deleteActivity.statusCode);
+
+  // Bookmarks are each person's own.
+  await inject('PATCH', `/api/v1/leads/${leadId}/bookmark`, ownerAuth);
+  const ownerSeesBookmark = await inject('GET', `/api/v1/leads/${leadId}`, ownerAuth);
+  const agentSeesBookmark = await inject('GET', `/api/v1/leads/${leadId}`, agentAuth);
+  check(
+    'Bookmarking a lead marks it for that person only',
+    ownerSeesBookmark.json()?.data?.isBookmarked === true &&
+      agentSeesBookmark.json()?.data?.isBookmarked === false &&
+      !('bookmarkedBy' in (ownerSeesBookmark.json()?.data ?? {})),
+    [ownerSeesBookmark.json()?.data?.isBookmarked, agentSeesBookmark.json()?.data?.isBookmarked]
+  );
+
+  const agentLead = await inject('POST', '/api/v1/leads', agentAuth, {
+    contactName: 'Smoke Agent Lead',
+    contactPhone: workPhone(2),
+  });
+  const agentLeadId = agentLead.json()?.data?._id as string;
+  workLeadIds.push(agentLeadId);
+  check('Agent can create a lead of their own', agentLead.statusCode === 201, agentLead.json());
+
+  // ─── Tasks ────────────────────────────────────────────────────────────────
+  const taskStart = new Date(Date.now() + 86_400_000).toISOString();
+  const taskEnd = new Date(Date.now() + 2 * 86_400_000).toISOString();
+
+  const agentTask = await inject('POST', '/api/v1/tasks', agentAuth, {
+    subject: 'Smoke agent task',
+    startDate: taskStart,
+    endDate: taskEnd,
+    leadId: agentLeadId,
+    comments: [{ text: 'Typed before the task existed', userName: 'Someone Else' }],
+  });
+  const agentTaskId = agentTask.json()?.data?._id as string;
+  workTaskIds.push(agentTaskId);
+  check(
+    'Comments typed while creating a task are kept, authored by the creator',
+    agentTask.statusCode === 201 &&
+      agentTask.json()?.data?.comments?.length === 1 &&
+      agentTask.json()?.data?.comments?.[0]?.userName === agentName,
+    agentTask.json()?.data?.comments
+  );
+
+  const backwardsTask = await inject('POST', '/api/v1/tasks', agentAuth, {
+    subject: 'Ends before it starts',
+    startDate: taskEnd,
+    endDate: taskStart,
+  });
+  check(
+    'A task cannot end before it starts',
+    backwardsTask.statusCode === 400 && backwardsTask.json()?.error?.code === 'INVALID_DATE_RANGE',
+    backwardsTask.json()
+  );
+
+  const strangerAssignee = await inject('POST', '/api/v1/tasks', agentAuth, {
+    subject: 'Given to nobody real',
+    startDate: taskStart,
+    endDate: taskEnd,
+    assignedTo: [new Types.ObjectId().toString()],
+  });
+  check('A task can only be given to active members', strangerAssignee.statusCode === 400, strangerAssignee.statusCode);
+
+  const ownerPrivateTask = await inject('POST', '/api/v1/tasks', ownerAuth, {
+    subject: 'Smoke owner private task',
+    startDate: taskStart,
+    endDate: taskEnd,
+  });
+  const ownerPrivateTaskId = ownerPrivateTask.json()?.data?._id as string;
+  workTaskIds.push(ownerPrivateTaskId);
+
+  const agentOpensPrivate = await inject('GET', `/api/v1/tasks/${ownerPrivateTaskId}`, agentAuth);
+  const agentMovesPrivate = await inject('PATCH', `/api/v1/tasks/${ownerPrivateTaskId}/status`, agentAuth, {
+    status: 'completed',
+  });
+  const agentDeletesPrivate = await inject('DELETE', `/api/v1/tasks/${ownerPrivateTaskId}`, agentAuth);
+  check(
+    'An agent cannot open, move or delete someone else’s task',
+    agentOpensPrivate.statusCode === 403 &&
+      agentMovesPrivate.statusCode === 403 &&
+      agentDeletesPrivate.statusCode === 403,
+    [agentOpensPrivate.statusCode, agentMovesPrivate.statusCode, agentDeletesPrivate.statusCode]
+  );
+
+  const ownerTaskOnAgentLead = await inject('POST', '/api/v1/tasks', ownerAuth, {
+    subject: 'Smoke owner task on agent lead',
+    startDate: taskStart,
+    endDate: taskEnd,
+    leadId: agentLeadId,
+  });
+  const ownerTaskOnAgentLeadId = ownerTaskOnAgentLead.json()?.data?._id as string;
+  const agentOpensLeadTask = await inject('GET', `/api/v1/tasks/${ownerTaskOnAgentLeadId}`, agentAuth);
+  const agentEditsLeadTask = await inject('PUT', `/api/v1/tasks/${ownerTaskOnAgentLeadId}`, agentAuth, {
+    subject: 'Renamed by the agent',
+  });
+  const agentCompletesLeadTask = await inject(
+    'PATCH',
+    `/api/v1/tasks/${ownerTaskOnAgentLeadId}/status`,
+    agentAuth,
+    { status: 'completed' }
+  );
+  check(
+    'The owner of a lead works its tasks, but only the creator edits them',
+    agentOpensLeadTask.statusCode === 200 &&
+      agentEditsLeadTask.statusCode === 403 &&
+      agentCompletesLeadTask.statusCode === 200,
+    [agentOpensLeadTask.statusCode, agentEditsLeadTask.statusCode, agentCompletesLeadTask.statusCode]
+  );
+
+  const agentEditsOwnTask = await inject('PUT', `/api/v1/tasks/${agentTaskId}`, agentAuth, {
+    subject: 'Smoke agent task, edited',
+    checklist: [{ text: 'Added after creation' }],
+  });
+  check(
+    'A creator can edit their task, checklist included',
+    agentEditsOwnTask.statusCode === 200 && agentEditsOwnTask.json()?.data?.checklist?.length === 1,
+    agentEditsOwnTask.json()
+  );
+
+  const leadTasks = await inject('GET', `/api/v1/tasks?leadId=${agentLeadId}`, agentAuth);
+  check(
+    'Everyone who can see a lead sees all of its tasks',
+    (leadTasks.json()?.total ?? 0) >= 2,
+    leadTasks.json()?.total
+  );
+
+  const mineList = await inject('GET', '/api/v1/tasks?bucket=assigned&limit=100', agentAuth);
+  const mineCounts = await inject('GET', '/api/v1/tasks/stats/status-counts?bucket=assigned', agentAuth);
+  check(
+    'Tab counts use the same filter as the list',
+    mineCounts.statusCode === 200 && mineCounts.json()?.data?.total === mineList.json()?.total,
+    [mineCounts.json()?.data?.total, mineList.json()?.total]
+  );
+
+  // ─── Meetings ─────────────────────────────────────────────────────────────
+  const meetingDay = indiaDay(21);
+  const meetingStart = indiaAt(meetingDay, 9, 30);
+
+  const agentMeeting = await inject('POST', '/api/v1/meetings', agentAuth, {
+    leadId: agentLeadId,
+    scheduledAt: meetingStart,
+    durationMinutes: 60,
+    meetingType: 'office_visit',
+    comments: [{ text: 'Discuss pricing' }],
+  });
+  const agentMeetingId = agentMeeting.json()?.data?._id as string;
+  const linkedTaskId = agentMeeting.json()?.data?.linkedTaskId?._id as string;
+  check(
+    'An agent can book a meeting on their own lead, keeping the purpose notes',
+    agentMeeting.statusCode === 201 &&
+      agentMeeting.json()?.data?.comments?.length === 1 &&
+      (agentMeeting.json()?.data?.assignedTo ?? []).some((a: { _id: string }) => a._id === agentId) &&
+      Boolean(linkedTaskId),
+    agentMeeting.json()
+  );
+
+  const leadAfterBooking = await inject('GET', `/api/v1/leads/${agentLeadId}`, agentAuth);
+  check(
+    'Booking a meeting moves a new lead to the Meeting stage',
+    leadAfterBooking.json()?.data?.stage === 'meeting',
+    leadAfterBooking.json()?.data?.stage
+  );
+
+  const doubleBooked = await inject('POST', '/api/v1/meetings', agentAuth, {
+    leadId: agentLeadId,
+    scheduledAt: indiaAt(meetingDay, 10, 0),
+    durationMinutes: 30,
+    meetingType: 'phone_call',
+  });
+  check(
+    'An attendee cannot be double-booked',
+    doubleBooked.statusCode === 409 && doubleBooked.json()?.error?.code === 'MEETING_CONFLICT',
+    doubleBooked.json()
+  );
+
+  const pastMeeting = await inject('POST', '/api/v1/meetings', agentAuth, {
+    leadId: agentLeadId,
+    scheduledAt: new Date(Date.now() - 86_400_000).toISOString(),
+    meetingType: 'phone_call',
+  });
+  check(
+    'A meeting cannot be booked in the past',
+    pastMeeting.statusCode === 400 && pastMeeting.json()?.error?.code === 'MEETING_IN_PAST',
+    pastMeeting.json()
+  );
+
+  const slotFor = async (userId: string) => {
+    const slots = await inject(
+      'GET',
+      `/api/v1/meetings/slots?date=${meetingDay}&durationMinutes=60&userIds=${userId}`,
+      agentAuth
+    );
+    return (slots.json()?.data?.slots ?? []).find((slot: { start: string }) => slot.start === meetingStart) as
+      | { state: string }
+      | undefined;
+  };
+  const agentSlot = await slotFor(agentId);
+  const ownerSlot = await slotFor(ownerId);
+  check(
+    'Slots are busy only for the attendees who are booked, in the user’s time zone',
+    agentSlot?.state === 'busy' && ownerSlot?.state === 'free',
+    [agentSlot, ownerSlot]
+  );
+
+  const ownerMeeting = await inject('POST', '/api/v1/meetings', ownerAuth, {
+    leadId: duplicateAllowed.json()?.data?._id,
+    scheduledAt: indiaAt(indiaDay(22), 14, 30),
+    meetingType: 'site_visit',
+  });
+  const agentOpensOwnerMeeting = await inject('GET', `/api/v1/meetings/${ownerMeeting.json()?.data?._id}`, agentAuth);
+  check(
+    'An agent cannot open a meeting they have no part in',
+    ownerMeeting.statusCode === 201 && agentOpensOwnerMeeting.statusCode === 403,
+    [ownerMeeting.statusCode, agentOpensOwnerMeeting.statusCode]
+  );
+
+  const newStart = indiaAt(meetingDay, 11, 30);
+  const rescheduled = await inject('PUT', `/api/v1/meetings/${agentMeetingId}`, agentAuth, {
+    scheduledAt: newStart,
+  });
+  const movedTask = await inject('GET', `/api/v1/tasks/${linkedTaskId}`, agentAuth);
+  check(
+    'Rescheduling marks the meeting rescheduled and moves its task',
+    rescheduled.statusCode === 200 &&
+      rescheduled.json()?.data?.status === 'rescheduled' &&
+      new Date(movedTask.json()?.data?.endDate).getTime() === new Date(newStart).getTime() + 60 * 60_000,
+    [rescheduled.json()?.data?.status, movedTask.json()?.data?.endDate]
+  );
+
+  await inject('PATCH', `/api/v1/meetings/${agentMeetingId}/status`, agentAuth, { status: 'cancelled' });
+  const taskWhileCancelled = await inject('GET', `/api/v1/tasks/${linkedTaskId}`, agentAuth);
+  await inject('PATCH', `/api/v1/meetings/${agentMeetingId}/status`, agentAuth, { status: 'scheduled' });
+  const taskAfterReopen = await inject('GET', `/api/v1/tasks/${linkedTaskId}`, agentAuth);
+  check(
+    'Cancelling a meeting archives its task, and reopening brings it back',
+    taskWhileCancelled.statusCode === 404 && taskAfterReopen.statusCode === 200,
+    [taskWhileCancelled.statusCode, taskAfterReopen.statusCode]
+  );
+
+  const completed = await inject('PATCH', `/api/v1/meetings/${agentMeetingId}/status`, agentAuth, {
+    status: 'completed',
+    outcome: 'Went well',
+  });
+  const taskAfterComplete = await inject('GET', `/api/v1/tasks/${linkedTaskId}`, agentAuth);
+  const leadAfterMeeting = await inject('GET', `/api/v1/leads/${agentLeadId}`, agentAuth);
+  const agentTimeline = await inject('GET', `/api/v1/leads/${agentLeadId}/thread?channel=timeline&limit=50`, agentAuth);
+  const events = (agentTimeline.json()?.data ?? []).map((item: { event?: string }) => item.event);
+  check(
+    'Completing a meeting completes its task, counts as contact, and is on the timeline',
+    completed.statusCode === 200 &&
+      taskAfterComplete.json()?.data?.status === 'completed' &&
+      Boolean(leadAfterMeeting.json()?.data?.lastContactedAt) &&
+      ['meeting_booked', 'meeting_rescheduled', 'meeting_completed', 'task_created', 'task_completed'].every(
+        (event) => events.includes(event)
+      ),
+    events
+  );
+
+  // ─── Meeting list: tabs, filters, search ──────────────────────────────────
+  const siteVisit = await inject('POST', '/api/v1/meetings', agentAuth, {
+    leadId: agentLeadId,
+    scheduledAt: indiaAt(indiaDay(23), 10, 0),
+    durationMinutes: 30,
+    meetingType: 'site_visit',
+    purpose: purposeId,
+  });
+  const siteVisitId = siteVisit.json()?.data?._id as string;
+  const forgotten = await inject('POST', '/api/v1/meetings', agentAuth, {
+    leadId: agentLeadId,
+    scheduledAt: indiaAt(indiaDay(24), 10, 0),
+    durationMinutes: 30,
+    meetingType: 'phone_call',
+  });
+  const forgottenId = forgotten.json()?.data?._id as string;
+  // Nobody can book in the past, so the meeting is moved there directly — as
+  // if its day had simply come and gone with nobody closing it.
+  await withoutTenantScope('smoke test setup: a meeting whose day has passed', () =>
+    Meeting.updateOne({ _id: forgottenId }, { scheduledAt: new Date(Date.now() - 2 * 86_400_000) })
+  );
+
+  const idsOf = (res: { json: () => { data?: Array<{ _id: string }> } }) =>
+    (res.json()?.data ?? []).map((m) => m._id);
+
+  const byName = await inject('GET', '/api/v1/meetings?search=smoke%20agent%20lead&limit=100', agentAuth);
+  const byPhone = await inject('GET', `/api/v1/meetings?search=${workPhone(2).slice(-6)}&limit=100`, agentAuth);
+  const noMatch = await inject('GET', '/api/v1/meetings?search=no-such-customer-xyz', agentAuth);
+  check(
+    'Meetings are searched by the customer’s name or number',
+    idsOf(byName).includes(siteVisitId) && idsOf(byPhone).includes(siteVisitId) && noMatch.json()?.total === 0,
+    [byName.json()?.total, byPhone.json()?.total, noMatch.json()?.total]
+  );
+
+  const byType = await inject('GET', '/api/v1/meetings?meetingType=site_visit&limit=100', agentAuth);
+  const byPurpose = await inject('GET', `/api/v1/meetings?purpose=${purposeId}&limit=100`, agentAuth);
+  check(
+    'Meetings filter by type and by purpose',
+    idsOf(byType).includes(siteVisitId) &&
+      (byType.json()?.data ?? []).every((m: { meetingType: string }) => m.meetingType === 'site_visit') &&
+      idsOf(byPurpose).includes(siteVisitId) &&
+      !idsOf(byPurpose).includes(forgottenId),
+    [byType.json()?.total, byPurpose.json()?.total]
+  );
+
+  const missedTab = await inject('GET', '/api/v1/meetings?scope=missed&limit=100', agentAuth);
+  const upcomingTab = await inject('GET', '/api/v1/meetings?scope=upcoming&limit=100', agentAuth);
+  const completedTab = await inject('GET', '/api/v1/meetings?scope=completed&limit=100', agentAuth);
+  check(
+    'A meeting whose time passed unresolved is Missed, not Upcoming; completed ones are under Completed',
+    idsOf(missedTab).includes(forgottenId) &&
+      !idsOf(upcomingTab).includes(forgottenId) &&
+      idsOf(upcomingTab).includes(siteVisitId) &&
+      !idsOf(missedTab).includes(siteVisitId) &&
+      idsOf(completedTab).includes(agentMeetingId),
+    [missedTab.json()?.total, upcomingTab.json()?.total, completedTab.json()?.total]
+  );
+
+  const tabCounts = await inject('GET', '/api/v1/meetings/stats/tab-counts', agentAuth);
+  const allTab = await inject('GET', '/api/v1/meetings?limit=1', agentAuth);
+  check(
+    'Meeting tab counts match the rows each tab lists',
+    tabCounts.statusCode === 200 &&
+      tabCounts.json()?.data?.all === allTab.json()?.total &&
+      tabCounts.json()?.data?.missed === missedTab.json()?.total &&
+      tabCounts.json()?.data?.upcoming === upcomingTab.json()?.total &&
+      tabCounts.json()?.data?.completed === completedTab.json()?.total,
+    [tabCounts.json()?.data, allTab.json()?.total]
+  );
+
+  const siteVisitDetail = await inject('GET', `/api/v1/meetings/${siteVisitId}`, agentAuth);
+  const detailLead = siteVisitDetail.json()?.data?.leadId ?? {};
+  check(
+    'A meeting carries the customer’s priority and source for its detail screen',
+    typeof detailLead.priority === 'string' && typeof detailLead.source === 'string',
+    detailLead
+  );
+
+  await inject('PUT', `/api/v1/tasks/${agentTaskId}`, agentAuth, {
+    labels: [{ name: 'Smoke Label', color: '#123456' }],
+  });
+  const taskLabels = await inject('GET', '/api/v1/tasks/labels', agentAuth);
+  const byLabel = await inject('GET', `/api/v1/tasks?label=${encodeURIComponent('Smoke Label')}&limit=100`, agentAuth);
+  check(
+    'Task labels are listed for the filter, and filtering by one finds only its tasks',
+    (taskLabels.json()?.data ?? []).some((l: { name: string; count: number }) => l.name === 'Smoke Label' && l.count >= 1) &&
+      idsOf(byLabel).includes(agentTaskId) &&
+      !idsOf(byLabel).includes(ownerTaskOnAgentLeadId),
+    [taskLabels.json()?.data, byLabel.json()?.total]
+  );
+
+  const tasksByCustomer = await inject('GET', '/api/v1/tasks?search=smoke%20agent%20lead&limit=100', agentAuth);
+  check(
+    'Tasks are searched by their customer’s name, not only their subject',
+    idsOf(tasksByCustomer).includes(agentTaskId),
+    tasksByCustomer.json()?.total
+  );
+
+  // ─── Call logs ────────────────────────────────────────────────────────────
+  const call = await inject('POST', `/api/v1/leads/${agentLeadId}/call-logs`, agentAuth, { outcome: 'answered' });
+  const callId = call.json()?.data?._id as string;
+  const correctedCall = await inject('PUT', `/api/v1/leads/${agentLeadId}/call-logs/${callId}`, agentAuth, {
+    outcome: 'busy',
+  });
+  const afterCorrection = await inject('GET', `/api/v1/leads/${agentLeadId}`, agentAuth);
+  check(
+    'A logged call can be corrected, and the lead’s last call follows',
+    correctedCall.statusCode === 200 && afterCorrection.json()?.data?.latestCallLog?.outcome === 'busy',
+    afterCorrection.json()?.data?.latestCallLog
+  );
+
+  const deletedCall = await inject('DELETE', `/api/v1/leads/${agentLeadId}/call-logs/${callId}`, agentAuth);
+  const afterCallDelete = await inject('GET', `/api/v1/leads/${agentLeadId}`, agentAuth);
+  check(
+    'A logged call can be deleted, and the call count follows',
+    deletedCall.statusCode === 200 && afterCallDelete.json()?.data?.callCount === 0,
+    afterCallDelete.json()?.data?.callCount
+  );
+
+  // ─── Delete and restore ───────────────────────────────────────────────────
+  await inject('DELETE', `/api/v1/leads/${agentLeadId}`, ownerAuth);
+  const meetingWhileDeleted = await inject('GET', `/api/v1/meetings/${agentMeetingId}`, agentAuth);
+  const deletedList = await inject('GET', '/api/v1/leads?deleted=true&limit=100', ownerAuth);
+  const agentDeletedList = await inject('GET', '/api/v1/leads?deleted=true', agentAuth);
+  check(
+    'Deleting a lead archives its meetings and lists it for organizers only',
+    meetingWhileDeleted.statusCode === 404 &&
+      (deletedList.json()?.data ?? []).some((lead: { _id: string }) => lead._id === agentLeadId) &&
+      agentDeletedList.statusCode === 403,
+    [meetingWhileDeleted.statusCode, agentDeletedList.statusCode]
+  );
+
+  const restored = await inject('POST', `/api/v1/leads/${agentLeadId}/restore`, ownerAuth);
+  const meetingAfterRestore = await inject('GET', `/api/v1/meetings/${agentMeetingId}`, agentAuth);
+  check(
+    'Restoring a lead brings back its meetings',
+    restored.statusCode === 200 && meetingAfterRestore.statusCode === 200,
+    [restored.statusCode, meetingAfterRestore.statusCode]
+  );
+
+  // ─── Renaming a purpose renames it on leads ───────────────────────────────
+  const purposeLead = await inject('POST', '/api/v1/leads', ownerAuth, {
+    contactName: 'Smoke Purpose Lead',
+    contactPhone: workPhone(3),
+    interestedIn: renamedPurpose,
+  });
+  workLeadIds.push(purposeLead.json()?.data?._id);
+  const secondName = `${renamedPurpose} v2`;
+  await inject('PUT', `/api/v1/purposes/${purposeId}`, ownerAuth, { name: secondName });
+  const purposeLeadAfter = await inject('GET', `/api/v1/leads/${purposeLead.json()?.data?._id}`, ownerAuth);
+  check(
+    'Renaming a purpose renames it on the leads that use it',
+    purposeLeadAfter.json()?.data?.interestedIn === secondName,
+    purposeLeadAfter.json()?.data?.interestedIn
+  );
+
   // ─── CROSS-TENANT ISOLATION ─────────────────────────────────────────────────
   section('Cross-tenant isolation (the one that matters)');
 
@@ -466,7 +1003,7 @@ async function main(): Promise<void> {
   // Kept, not inlined: the account checks later sign this owner in by email and
   // the cleanup removes their account.
   const tenantBOwnerEmail = `owner-${Date.now()}@smoke.test`;
-  const tenantBOwnerPhone = `9${Date.now().toString().slice(-9)}`;
+  const tenantBOwnerPhone = smokeMobile('9', Date.now());
   const signup = await app.inject({
     method: 'POST',
     url: '/api/v1/signup',
@@ -656,7 +1193,7 @@ async function main(): Promise<void> {
     email: accountEmail,
     // Each smoke identity gets its own leading digit, so no two collide now that
     // a mobile number belongs to one person.
-    phone: `7${Date.now().toString().slice(-9)}`,
+    phone: smokeMobile('7', Date.now()),
     password: 'Password@123',
     acceptedTerms: true,
   };
@@ -833,7 +1370,7 @@ async function main(): Promise<void> {
   const takenEmail = await registerAccount({
     ...registration,
     email: 'owner@acme.test',
-    phone: `6${Date.now().toString().slice(-9)}`,
+    phone: smokeMobile('6', Date.now()),
   });
   check(
     'An email already tied to another mobile cannot be registered again',
@@ -855,7 +1392,7 @@ async function main(): Promise<void> {
   const lockRegistration = await registerAccount({
     ...registration,
     email: lockEmail,
-    phone: `8${Date.now().toString().slice(-9)}`,
+    phone: smokeMobile('8', Date.now()),
   });
   const lockReceipt = lockRegistration.json()?.data;
   const lockWrong = lockReceipt?.devCode === '000000' ? '111111' : '000000';
@@ -1193,7 +1730,7 @@ async function main(): Promise<void> {
   const provisionNew = await provisionOrg({
     organizationName: `Smoke Provisioned ${provisionStamp}`,
     ownerName: 'Provisioned Owner',
-    ownerPhone: `6${provisionStamp.toString().slice(-9)}`,
+    ownerPhone: smokeMobile('6', provisionStamp),
     ownerEmail: provisionedOwnerEmail,
     ownerPassword: 'Password@123',
   });
@@ -1234,7 +1771,7 @@ async function main(): Promise<void> {
     ...registration,
     firstName: 'Creator',
     email: creatorEmail,
-    phone: `8${(provisionStamp + 7).toString().slice(-9)}`,
+    phone: smokeMobile('8', provisionStamp + 7),
   });
   const creatorReceipt = creatorRegistration.json()?.data;
   await verifyAccount({
@@ -1533,7 +2070,7 @@ async function main(): Promise<void> {
   const newWithoutPassword = await provisionOrg({
     organizationName: `Smoke No Password ${provisionStamp}`,
     ownerName: 'No Password',
-    ownerPhone: `6${(provisionStamp + 1).toString().slice(-9)}`,
+    ownerPhone: smokeMobile('6', provisionStamp + 1),
     ownerEmail: `no-password-${provisionStamp}@smoke.test`,
   });
   check(
@@ -1547,7 +2084,7 @@ async function main(): Promise<void> {
     organizationName: `Smoke Conflict ${provisionStamp}`,
     slug: conflictSlug,
     ownerName: 'Somebody Else',
-    ownerPhone: `6${(provisionStamp + 2).toString().slice(-9)}`,
+    ownerPhone: smokeMobile('6', provisionStamp + 2),
     ownerEmail: 'owner@acme.test',
     ownerPassword: 'Password@123',
   });
@@ -1641,6 +2178,13 @@ async function main(): Promise<void> {
     await Notification.deleteMany({ organizationId: orgB!._id });
     await Organization.deleteOne({ _id: orgB!._id });
     await Lead.deleteOne({ _id: leadId });
+    // Everything the leads, tasks and meetings section made.
+    const smokeLeadIds = workLeadIds.filter(Boolean);
+    await Task.deleteMany({ $or: [{ leadId: { $in: smokeLeadIds } }, { _id: { $in: workTaskIds.filter(Boolean) } }] });
+    await Meeting.deleteMany({ leadId: { $in: smokeLeadIds } });
+    await CallLog.deleteMany({ leadId: { $in: smokeLeadIds } });
+    await LeadThreadItem.deleteMany({ lead: { $in: smokeLeadIds } });
+    await Lead.deleteMany({ _id: { $in: smokeLeadIds } });
     await Notification.deleteMany({ entityId: leadId });
     await LeadDropReason.deleteOne({ _id: dropReasonId });
     await PurposeOfInquiry.deleteOne({ _id: purposeId });

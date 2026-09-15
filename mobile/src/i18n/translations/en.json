@@ -138,6 +138,196 @@
     "failed": "Couldn't create the organization",
     "failedMessage": "Something went wrong. Please try again."
   },
+  "leadWork": {
+    "meetings": "Meetings ({{count}})",
+    "tasks": "Tasks ({{count}})",
+    "schedule": "Schedule",
+    "addTask": "Add task",
+    "noMeetings": "No meetings on this lead yet.",
+    "noTasks": "No tasks on this lead yet.",
+    "loadFailed": "Couldn't load. Pull to refresh."
+  },
+  "work": {
+    "all": "All",
+    "overdue": "OVERDUE",
+    "startDate": "Start Date",
+    "endDate": "End Date",
+    "startTime": "Start Time",
+    "endTime": "End Time",
+    "unknownContact": "Unknown contact",
+    "searchPlaceholder": "Search by customer name or number",
+    "commentCount_one": "{{count}} comment",
+    "commentCount_other": "{{count}} comments",
+    "checklistProgress": "{{done}} of {{total}} done",
+    "commentPlaceholder": "Write a comment",
+    "commentFailed": "Couldn't post your comment.",
+    "errorTitle": "Something went wrong",
+    "loadFailedTitle": "Couldn't load",
+    "loadFailed": "Check your connection and pull down to try again.",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "no": "No",
+    "taskStatus": {
+      "pending": "Pending",
+      "in_progress": "In Progress",
+      "on_hold": "On Hold",
+      "in_review": "In Review",
+      "completed": "Completed"
+    },
+    "meetingStatus": {
+      "scheduled": "Scheduled",
+      "completed": "Completed",
+      "cancelled": "Cancelled",
+      "rescheduled": "Rescheduled",
+      "missed": "Missed"
+    },
+    "meetingType": {
+      "office_visit": "Office Visit",
+      "site_visit": "Site Visit",
+      "client_office": "Client's Office",
+      "phone_call": "Phone Call",
+      "google_meet": "Google Meet",
+      "zoom": "Zoom Meeting"
+    },
+    "meetingTabs": {
+      "all": "All",
+      "today": "Today",
+      "tomorrow": "Tomorrow",
+      "upcoming": "Upcoming",
+      "completed": "Completed",
+      "cancelled": "Cancelled",
+      "rescheduled": "Rescheduled",
+      "missed": "Missed"
+    },
+    "priority": {
+      "hot": "Hot",
+      "warm": "Warm",
+      "cold": "Cold"
+    },
+    "role": {
+      "user": "Agent",
+      "partner": "Partner",
+      "manager": "Manager",
+      "admin": "Admin",
+      "owner": "Owner"
+    },
+    "filter": {
+      "title": "Filter",
+      "close": "Close filters",
+      "dateRange": "Date Range",
+      "selectDates": "Select dates",
+      "clearDates": "Clear dates",
+      "meetingType": "Meeting Type",
+      "purpose": "Purpose of Inquiry",
+      "noPurposes": "No purposes have been set up yet.",
+      "label": "Label",
+      "noLabels": "No task has a label yet.",
+      "reset": "Reset",
+      "apply": "Apply",
+      "remove": "Remove filter {{label}}",
+      "clearAll": "Clear all"
+    },
+    "meetings": {
+      "title": "Meetings",
+      "create": "Create meeting",
+      "empty": "No meetings",
+      "emptyTab": "Nothing here right now.",
+      "emptyFiltered": "No meetings match your search or filters."
+    },
+    "tasks": {
+      "title": "All Tasks",
+      "create": "Create task",
+      "mine": "My Task",
+      "assigned": "Assign Task",
+      "empty": "No tasks",
+      "emptyTab": "Nothing here right now.",
+      "emptyFiltered": "No tasks match your search or filters."
+    },
+    "meeting": {
+      "title": "Meeting Details",
+      "edit": "Edit or reschedule meeting",
+      "delete": "Delete meeting",
+      "deleteConfirm": "Delete this meeting and its follow-up task?",
+      "deleteFailed": "Couldn't delete the meeting.",
+      "updateFailed": "Couldn't update the meeting.",
+      "noAccess": "You don't have access to this meeting.",
+      "notFound": "Meeting not found.",
+      "openLead": "Open lead",
+      "copyPhone": "Copy phone number",
+      "copied": "Copied",
+      "clientId": "CLIENT ID",
+      "date": "MEETING DATE",
+      "purpose": "PURPOSE",
+      "source": "SOURCE",
+      "attendees": "ATTENDEES",
+      "bookedBy": "BOOKED BY",
+      "whatsapp": "WhatsApp",
+      "call": "Call",
+      "whatsappUnavailable": "WhatsApp is not installed.",
+      "callUnavailable": "Cannot place a call from this device.",
+      "statusTab": "Status",
+      "timelineTab": "Time Line",
+      "missedHint": "This meeting's time has passed. Mark it completed, reschedule or cancel it.",
+      "complete": "Complete meeting",
+      "reschedule": "Reschedule",
+      "cancelMeeting": "Cancel meeting",
+      "cancelTitle": "Cancel meeting",
+      "cancelConfirm": "Are you sure you want to cancel this meeting? Attendees will be told.",
+      "cancelYes": "Yes, cancel",
+      "completeTitle": "Complete meeting",
+      "completeConfirm": "Are you sure you want to complete this meeting?",
+      "outcomePlaceholder": "How did it go? (optional)",
+      "completeYes": "Yes, complete",
+      "outcome": "Outcome",
+      "notes": "Notes",
+      "reopen": "Reopen meeting",
+      "followUpTask": "Follow-up task",
+      "noComments": "No comments yet.",
+      "state": {
+        "scheduled": {
+          "title": "Meeting scheduled",
+          "message": "Starts at {{when}}. Complete it once it is done."
+        },
+        "rescheduled": {
+          "title": "Meeting rescheduled",
+          "message": "Moved to {{when}}. Complete it once it is done."
+        },
+        "completed": {
+          "title": "Meeting completed",
+          "message": "The meeting has been successfully completed."
+        },
+        "cancelled": {
+          "title": "Meeting cancelled",
+          "message": "This meeting was cancelled."
+        }
+      }
+    },
+    "task": {
+      "title": "Task Details",
+      "edit": "Edit task",
+      "delete": "Delete task",
+      "deleteConfirm": "Delete this task? It will no longer appear anywhere.",
+      "deleteFailed": "Couldn't delete the task.",
+      "updateFailed": "Couldn't update the task.",
+      "noAccess": "You don't have access to this task.",
+      "notFound": "Task not found.",
+      "overdueHint": "Past its end date",
+      "status": "Status",
+      "changeStatus": "Status: {{status}}. Tap to change",
+      "lead": "Lead",
+      "meeting": "Meeting",
+      "commentsTab": "Comments",
+      "membersTab": "Members",
+      "checklistTab": "Check List",
+      "noComments": "No comments yet.",
+      "noMembers": "No one is on this task.",
+      "noChecklist": "This task has no checklist.",
+      "you": "(You)",
+      "creator": "Task Creator",
+      "assignee": "Assignee",
+      "callMember": "Call {{name}}"
+    }
+  },
   "organizations": {
     "title": "Organizations",
     "subtitle": "Every organization you belong to, with one sign-in.",
@@ -329,7 +519,9 @@
     "types": {
       "lead_assigned": "{{actor}} assigned the lead {{subject}} to you",
       "task_assigned": "{{actor}} assigned you the task \"{{subject}}\"",
-      "meeting_assigned": "{{actor}} added you to a meeting with {{subject}}"
+      "meeting_assigned": "{{actor}} added you to a meeting with {{subject}}",
+      "meeting_rescheduled": "{{actor}} rescheduled your meeting with {{subject}}",
+      "meeting_cancelled": "{{actor}} cancelled your meeting with {{subject}}"
     }
   },
   "dropReasons": {

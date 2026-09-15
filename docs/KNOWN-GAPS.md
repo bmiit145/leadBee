@@ -301,7 +301,7 @@ marked *ADR* add infrastructure or a policy decision.
 | **Ask Query inbox** | `GET /leads/queries` across leads, respecting visibility | Per-lead threads already exist |
 | **Call tracking** *ADR* | Read the device call log (Android `READ_CALL_LOG`), match calls to leads, sync durations | Google Play restricts this permission — check the policy first |
 | **Call Activity report** | A call type on `CallLog` (New, Follow-up, Payment, Upselling, Review, Service) and a date-range report | |
-| **Meetings: Missed status** | A missed state (or a derived one) for past scheduled meetings, and more tabs | Derive at read time or sweep on a schedule (see 2.5) |
+| ~~**Meetings: Missed status**~~ | Done 2026-09-15: derived at read time, with All / Today / Tomorrow / Upcoming / Completed / Cancelled / Rescheduled / Missed tabs and counts | Acting on a missed meeting is still open (7.10) |
 | **Lead form fields** | Company name, editable lead date, "save to phone contacts" (`expo-contacts`, new build), customer ID preview | |
 | **Lead card details** | Show purpose, quality and estimate amount | Screen-only change |
 | **Support tickets** | Model, list with Open / Pending / Closed, create flow | |
@@ -404,7 +404,153 @@ registers in the app, confirms their email, and appears in the console under
 
 ---
 
-## 7. Local development notes
+## 7. Leads, meetings and tasks
+
+Added 2026-09-15, after the lead-management review. Fixed in the same change:
+edit lead (it created a duplicate), the stage chosen at creation, staged task
+and meeting comments, attendee-aware meeting slots, server-side double-booking
+and past-time checks, agents booking meetings on their leads, within-tenant
+access on tasks and meetings, meetings and tasks on the lead screen, archive and
+restore with a deleted lead, meeting ↔ lead updates, the automatic lead
+timeline, meeting reschedule/cancel/reopen with notifications and task sync,
+edit/delete for tasks and meetings in the app, time-zone-aware days and booking
+window, duplicate-phone warning, per-person bookmarks, required drop reason
+linked to drop tags, purpose renames carried to leads, tab counts that match the
+list, task date order, and editing and deleting call logs. The smoke test covers
+each.
+
+The same day, after comparing with the reference app (LeadSo), these were
+added: the eight meeting tabs including Missed, filter sheets (meetings: date
+range, type, purpose; tasks: date range, label), customer name and number
+search on the server for both lists, the task card with description, comment
+and checklist counts and member avatars, the task detail's Comments / Members /
+Check List tabs, and the meeting detail with the lead's deal value, priority,
+source and purpose, WhatsApp and Call, and Status / Time Line tabs. Items 7.7
+onward are what that work left.
+
+### [ ] 7.1 Run the bookmark migration in every environment — P0 before deploy
+
+- **What.** Bookmarks moved from one shared `Lead.isBookmarked` flag to each
+  person's `Lead.bookmarkedBy`. Until the migration runs, existing bookmarks do
+  not show and the old index remains.
+- **Fix.** `npx tsx src/scripts/migrateLeadBookmarks.ts` (dry run), then
+  `--apply`, in `backend/` against each environment. Applied to the local dev
+  database on 2026-09-15 (6 bookmarks moved, old index dropped).
+
+### [ ] 7.2 No bulk actions, import or export — P2
+
+- **What.** Leads are assigned, moved between stages and deleted one at a time.
+  There is no CSV import (portals, spreadsheets) and no export.
+- **Fix.** `POST /leads/bulk` (organizers; assign / stage / delete, capped, one
+  audit entry per lead) with multi-select on the lead list; an import job with a
+  duplicate report; an export honouring the plan's `crm.exports` feature.
+
+### [ ] 7.3 Lead timeline activity is English only — P2 (MOB-16)
+
+- **What.** Activity entries ("Moved the lead from New to Meeting") are written
+  as English text by the API. Each also stores an `event` code and `meta`.
+- **Fix.** Render activity in the app from `event` + `meta` through i18n, and
+  keep `text` only as a fallback for older builds.
+
+### [ ] 7.4 The double-booking check is not atomic — P2
+
+- **What.** Booking and rescheduling refuse a slot that overlaps an attendee's
+  open meeting, but two requests for the same attendee at the same moment can
+  both pass the check.
+- **Fix.** A per-attendee lock (a short-lived `bookingLocks` document keyed on
+  attendee and day, created in a transaction with the meeting), or re-check
+  after insert and roll back the later one.
+
+### [ ] 7.5 Deleted leads have Undo but no recycle bin — P2
+
+- **What.** Deleting a lead shows Undo for a few seconds. After that the API can
+  still list (`GET /leads?deleted=true`) and restore (`POST /leads/:id/restore`)
+  it, but no screen does.
+- **Fix.** A "Deleted leads" view for organizers in the lead list's filter, with
+  Restore, and a retention period after which deleted leads are purged.
+
+### [ ] 7.6 Task and meeting services have no unit tests — P2 (ENG-19)
+
+- **What.** The access rules and time-zone arithmetic are unit tested; the
+  services themselves are covered only by the smoke test against a live
+  database (see 3.2).
+- **Fix.** Service tests with an in-memory MongoDB for conflicts, reopening,
+  lead cascade and restore.
+
+### [ ] 7.7 The lead list can show "No leads found" under a count of one — P1
+
+- **What.** Going back to All Leads can show the empty state while the tabs and
+  stats show leads. The rows are copied into local state (`allLeads`) inside
+  the query function, and a cached result (30-second `staleTime`) never runs
+  that function again, so the state stays empty after the screen remounts.
+- **Where.** `mobile/app/lead/list.tsx` — the `leads` `useQuery`.
+- **Fix.** Read the rows from `useInfiniteQuery` pages, as the meeting and task
+  lists now do; keep delete and restore as cache updates, not local state.
+- **Done when.** Opening a lead and going back within 30 seconds still lists it.
+
+### [ ] 7.8 Customer search scans leads with a regular expression — P2
+
+- **What.** Meeting and task search first looks up matching leads with a
+  case-insensitive, unanchored regex on name, mobile and lead number. That
+  cannot use an index, so it reads every lead in the organization per search.
+  Fine at today's sizes; slow for large organizations.
+- **Where.** `baseQuery` in `meetings/meeting.service.ts`, `buildQuery` in
+  `tasks/task.service.ts`.
+- **Fix.** A normalized search field (lower-case name, digits-only phone) with a
+  prefix index, or a text index; cap the matched lead ids.
+
+### [ ] 7.9 Meeting tab counts run eight queries — P2
+
+- **What.** `GET /meetings/stats/tab-counts` runs one count per tab.
+- **Fix.** One aggregation with `$facet`, sharing the base filter.
+
+### [ ] 7.10 A missed meeting is shown, not acted on — P2
+
+- **What.** Missed is worked out when the list is read. Nobody is told when a
+  meeting becomes missed, and the lead is not flagged for follow-up.
+- **Fix.** A scheduled sweep that notifies the attendees and booker once per
+  meeting, and optionally a daily digest. Shares the scheduler needed for 2.5.
+
+### [ ] 7.11 Task labels are free text — P2 (CFG)
+
+- **What.** Each task stores its own label names and colours. A typo makes a
+  new label, a rename does not carry to other tasks, and the filter lists the
+  labels found on visible tasks (up to 100).
+- **Fix.** A tenant label lookup like purposes of inquiry, picked on the task
+  form, with renames carried to tasks.
+
+### [ ] 7.12 Dates, times and durations are formatted in English — P2 (MOB-16)
+
+- **What.** The new cards and detail screens format dates with fixed `en-GB` /
+  `en-IN` locales, and `formatDuration` returns "1 Hour". Gujarati users see
+  English month names and durations.
+- **Where.** `MeetingCard`, `TaskCard`, `app/meeting/[id].tsx`,
+  `app/task/[id].tsx`, `config/taskMeeting.ts`.
+- **Fix.** Format through the active i18n language, durations through i18n
+  plurals.
+
+### [ ] 7.13 Meeting detail has no company — P2
+
+- **What.** The reference app shows the customer's company on a meeting.
+  LeadBee's lead has no company field, so the meeting detail shows the client
+  ID in its place.
+- **Fix.** Add the company to the lead form (see "Lead form fields" in section
+  5), then a row on the meeting detail.
+
+### [ ] 7.14 Not yet walked through on a device — P2
+
+- **What.** Booking, the new cards, meeting detail, completing a meeting with an
+  outcome (its task followed) and the task detail tabs were checked on a phone
+  on 2026-09-15. Not yet: applying a filter, the Missed tab with real data,
+  ticking checklist items, and Reschedule / Cancel from the Status tab. The
+  smoke test covers the filters and tabs on the API.
+- **Also seen.** The dashed line between the dates in the dark task header
+  draws as a solid line on Android.
+- **Done when.** Each flow above is checked on Android and iOS.
+
+---
+
+## 8. Local development notes
 
 Not code defects, but they cost time.
 

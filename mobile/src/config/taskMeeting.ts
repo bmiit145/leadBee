@@ -1,4 +1,4 @@
-import type { TaskStatus, MeetingType, MeetingStatus } from '../types';
+import type { TaskStatus, MeetingType, MeetingStatus, Meeting } from '../types';
 
 export const TASK_STATUS_META: Record<TaskStatus, { label: string; color: string }> = {
   pending:     { label: 'Pending',     color: '#5B6B78' },
@@ -31,6 +31,26 @@ export const MEETING_STATUS_META: Record<MeetingStatus, { label: string; color: 
   cancelled:   { label: 'Cancelled',   color: '#BC5430' },
   rescheduled: { label: 'Rescheduled', color: '#C2731F' },
 };
+
+/** Still going to happen: these can be completed, cancelled or rescheduled. */
+export const OPEN_MEETING_STATUSES: MeetingStatus[] = ['scheduled', 'rescheduled'];
+
+export const MISSED_COLOR = '#C2731F';
+
+/**
+ * What a meeting reads as. `missed` is not stored — it is an open meeting
+ * whose end has passed with nobody completing or cancelling it, the same rule
+ * the API's Missed tab uses.
+ */
+export function meetingDisplayStatus(
+  meeting: Pick<Meeting, 'status' | 'scheduledAt' | 'durationMinutes'>
+): { key: MeetingStatus | 'missed'; color: string } {
+  const end = new Date(meeting.scheduledAt).getTime() + meeting.durationMinutes * 60_000;
+  if (OPEN_MEETING_STATUSES.includes(meeting.status) && end < Date.now()) {
+    return { key: 'missed', color: MISSED_COLOR };
+  }
+  return { key: meeting.status, color: MEETING_STATUS_META[meeting.status].color };
+}
 
 /** Same lead-time set the reference app offers for both meetings and lead reminders. */
 export const REMINDER_OPTIONS: { value: number | null; label: string }[] = [

@@ -30,9 +30,11 @@ interface LeadFilters {
   dateTo?: string;
   budgetMin?: number;
   budgetMax?: number;
+  /** Organizers only: soft-deleted leads. */
+  deleted?: boolean;
 }
 
-interface CreateLeadData {
+export interface CreateLeadData {
   contactName: string;
   contactPhone: string;
   contactSecondPhone?: string;
@@ -41,6 +43,8 @@ interface CreateLeadData {
   sourceDetail?: string;
   priority?: string;
   stage?: string;
+  /** Required with `stage: 'drop'`. */
+  lostReason?: string;
   project?: string;
   interestedIn?: string;
   budgetMin?: number;
@@ -51,6 +55,16 @@ interface CreateLeadData {
   assignedTo?: string;
   nextFollowUpAt?: string;
   notes?: string;
+  /** Sent after the person has seen the duplicate warning and chosen to go ahead. */
+  allowDuplicate?: boolean;
+}
+
+/** `error.details` of a 409 `DUPLICATE_LEAD`. `leadId` is present only when the caller can open that lead. */
+export interface DuplicateLeadDetails {
+  leadNumber: string;
+  assignedToName?: string;
+  leadId?: string;
+  contactName?: string;
 }
 
 interface CreateDocumentData {
@@ -61,7 +75,7 @@ interface CreateDocumentData {
   size?: number;
 }
 
-interface CreateCallLogData {
+export interface CallLogData {
   outcome: string;
   duration?: number;
   calledAt?: string;
@@ -88,6 +102,7 @@ export const leadService = {
     if (filters.dateTo)    params.append('dateTo',    filters.dateTo);
     if (filters.budgetMin !== undefined) params.append('budgetMin', String(filters.budgetMin));
     if (filters.budgetMax !== undefined) params.append('budgetMax', String(filters.budgetMax));
+    if (filters.deleted) params.append('deleted', 'true');
 
     const res = await api.get<PaginatedResponse<Lead>>(`/leads?${params.toString()}`);
     return res.data;
@@ -98,12 +113,14 @@ export const leadService = {
     return res.data.data;
   },
 
+  /** Rejects with 409 `DUPLICATE_LEAD` when the number is taken, unless `allowDuplicate` is set. */
   async create(data: CreateLeadData): Promise<Lead> {
     const res = await api.post<ApiResponse<Lead>>('/leads', data);
     return res.data.data;
   },
 
-  async update(leadId: string, data: Partial<CreateLeadData>): Promise<Lead> {
+  /** Stage is not accepted here — use `updateStage`. */
+  async update(leadId: string, data: Partial<Omit<CreateLeadData, 'stage'>>): Promise<Lead> {
     const res = await api.put<ApiResponse<Lead>>(`/leads/${leadId}`, data);
     return res.data.data;
   },
@@ -127,8 +144,15 @@ export const leadService = {
     return res.data.data;
   },
 
+  /** Organizers only. Also archives the lead's tasks and meetings. */
   async remove(leadId: string): Promise<void> {
     await api.delete(`/leads/${leadId}`);
+  },
+
+  /** Organizers only. Brings back the lead and the work archived with it. */
+  async restore(leadId: string): Promise<Lead> {
+    const res = await api.post<ApiResponse<Lead>>(`/leads/${leadId}/restore`);
+    return res.data.data;
   },
 
   async getCallLogs(leadId: string, page = 1, limit = 20): Promise<PaginatedResponse<CallLog>> {
@@ -138,9 +162,20 @@ export const leadService = {
     return res.data;
   },
 
-  async addCallLog(leadId: string, data: CreateCallLogData): Promise<CallLog> {
+  async addCallLog(leadId: string, data: CallLogData): Promise<CallLog> {
     const res = await api.post<ApiResponse<CallLog>>(`/leads/${leadId}/call-logs`, data);
     return res.data.data;
+  },
+
+  /** Its author or an organizer. */
+  async updateCallLog(leadId: string, callLogId: string, data: Partial<CallLogData>): Promise<CallLog> {
+    const res = await api.put<ApiResponse<CallLog>>(`/leads/${leadId}/call-logs/${callLogId}`, data);
+    return res.data.data;
+  },
+
+  /** Its author or an organizer. */
+  async deleteCallLog(leadId: string, callLogId: string): Promise<void> {
+    await api.delete(`/leads/${leadId}/call-logs/${callLogId}`);
   },
 
   /** `assignedTo` narrows the counts to one member's book — organizers only; the

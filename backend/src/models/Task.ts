@@ -63,6 +63,8 @@ export interface ITask extends Document {
   createdBy: mongoose.Types.ObjectId;
   completedAt?: Date;
   isActive: boolean;
+  /** Set when deleting its lead archived it, so restoring the lead brings exactly this back. */
+  archivedWithLead?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -112,6 +114,7 @@ const taskSchema = new Schema<ITask>(
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     completedAt: { type: Date },
     isActive: { type: Boolean, default: true },
+    archivedWithLead: { type: Boolean },
   },
   { timestamps: true }
 );

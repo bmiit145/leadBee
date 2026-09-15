@@ -112,6 +112,15 @@ const SESSIONLESS_PATHS = [
   '/accounts/session/refresh',
 ];
 
+/** The phone's IANA zone, e.g. `Asia/Kolkata`. Undefined where Intl cannot say; the API then uses its default. */
+const DEVICE_TIME_ZONE: string | undefined = (() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+})();
+
 const isSessionless = (url?: string): boolean =>
   !!url &&
   SESSIONLESS_PATHS.some(
@@ -156,6 +165,10 @@ api.interceptors.request.use(
     if (__DEV__) {
       console.log(`🚀 [API] ${config.method?.toUpperCase()} ${config.baseURL}${config.url}`);
     }
+
+    // "Today", "tomorrow", date filters and meeting slots are the user's days,
+    // so the API is told which zone the phone is in.
+    if (DEVICE_TIME_ZONE) config.headers['X-Timezone'] = DEVICE_TIME_ZONE;
 
     // A leftover token on a sign-in request would make its 401 look like an
     // expired session. See SESSIONLESS_PATHS.

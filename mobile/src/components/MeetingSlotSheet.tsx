@@ -45,7 +45,11 @@ export function MeetingSlotSheet({
   const [duration, setDuration] = useState(initialDurationMinutes);
   const [selected, setSelected] = useState<MeetingSlot | null>(null);
 
-  const dateISO = date.toISOString().slice(0, 10);
+  // The day as the user picked it. `toISOString` would give the UTC day — the
+  // previous day for anything picked before 05:30 in India.
+  const dateISO = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+    date.getDate()
+  ).padStart(2, '0')}`;
   const { data, isLoading } = useQuery({
     queryKey: ['meeting-slots', dateISO, duration, assignedTo.join(','), excludeMeetingId],
     queryFn: () => meetingService.getSlots(dateISO, duration, assignedTo, excludeMeetingId),

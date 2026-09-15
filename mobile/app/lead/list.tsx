@@ -18,6 +18,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Snackbar } from 'react-native-paper';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { LeadCard } from '../../src/components/LeadCard';
 import { leadService } from '../../src/services/lead.service';
@@ -170,19 +171,40 @@ export default function LeadListScreen() {
   });
 
   const queryClient = useQueryClient();
+  // The lead just deleted, while its Undo is on screen.
+  const [lastDeleted, setLastDeleted] = useState<Lead | null>(null);
+
   const deleteMutation = useMutation({
-    mutationFn: (leadId: string) => leadService.remove(leadId),
-    onSuccess: () => {
-      setAllLeads((prev) => prev.filter((l) => l._id !== deleteMutation.variables));
+    mutationFn: (lead: Lead) => leadService.remove(lead._id),
+    onSuccess: (_result, lead) => {
+      setAllLeads((prev) => prev.filter((l) => l._id !== lead._id));
+      setLastDeleted(lead);
       queryClient.invalidateQueries({ queryKey: ['leads-stats'] });
+      // Its meetings and tasks were archived with it.
+      queryClient.invalidateQueries({ queryKey: ['meetings'] });
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
     },
-    onError: () => Alert.alert('Error', 'Could not delete lead.'),
+    onError: (err: any) =>
+      Alert.alert('Error', err?.response?.data?.error?.message || 'Could not delete lead.'),
+  });
+
+  const restoreMutation = useMutation({
+    mutationFn: (lead: Lead) => leadService.restore(lead._id),
+    onSuccess: (restored) => {
+      setLastDeleted(null);
+      setAllLeads((prev) => [restored, ...prev.filter((l) => l._id !== restored._id)]);
+      queryClient.invalidateQueries({ queryKey: ['leads-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['meetings'] });
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+    },
+    onError: (err: any) =>
+      Alert.alert('Error', err?.response?.data?.error?.message || 'Could not restore the lead.'),
   });
 
   const handleDeleteLead = (lead: Lead) => {
-    Alert.alert('Delete Lead', `Delete "${lead.contactName}"? This cannot be undone.`, [
+    Alert.alert('Delete Lead', `Delete "${lead.contactName}"? Its meetings and tasks go with it. You can undo right after.`, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => deleteMutation.mutate(lead._id) },
+      { text: 'Delete', style: 'destructive', onPress: () => deleteMutation.mutate(lead) },
     ]);
   };
 
@@ -361,6 +383,20 @@ export default function LeadListScreen() {
           }
         />
       )}
+
+      <Snackbar
+        visible={lastDeleted !== null}
+        onDismiss={() => setLastDeleted(null)}
+        duration={8000}
+        action={{
+          label: 'Undo',
+          onPress: () => {
+            if (lastDeleted) restoreMutation.mutate(lastDeleted);
+          },
+        }}
+      >
+        {lastDeleted ? `Deleted ${lastDeleted.contactName}` : ''}
+      </Snackbar>
 
       {/* Filter Modal */}
       <Modal visible={showFilter} transparent animationType="slide" onRequestClose={() => setShowFilter(false)}>

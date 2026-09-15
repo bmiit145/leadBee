@@ -164,12 +164,15 @@ export interface Lead {
   leadNumber: string;
   contactName: string;
   contactPhone: string;
+  contactSecondPhone?: string;
   contactEmail?: string;
   source: LeadSource;
   sourceDetail?: string;
   priority: LeadPriority;
   stage: LeadStage;
   lostReason?: string;
+  /** The drop tag the reason names, when it names one. */
+  dropReason?: string;
   project?: ProjectRef | string;
   interestedIn?: string;
   budgetMin?: number;
@@ -228,6 +231,10 @@ export interface LeadThreadItem {
   _id: string;
   lead: string;
   channel: LeadThreadChannel;
+  /** `activity` entries are written by LeadBee when something happens to the lead; they cannot be edited. */
+  kind?: 'comment' | 'activity';
+  /** What happened, on an activity entry — e.g. `stage_changed`, `meeting_booked`. */
+  event?: string;
   text: string;
   createdByUser: string;
   createdByName: string;
@@ -279,7 +286,12 @@ export interface LeadDropReason {
 
 // ─── Notifications ──────────────────────────────────────────────────────────
 
-export type NotificationType = 'lead_assigned' | 'task_assigned' | 'meeting_assigned';
+export type NotificationType =
+  | 'lead_assigned'
+  | 'task_assigned'
+  | 'meeting_assigned'
+  | 'meeting_rescheduled'
+  | 'meeting_cancelled';
 export type NotificationEntity = 'lead' | 'task' | 'meeting';
 
 /** An inbox entry. Carries the event, not a sentence — the app translates it. */

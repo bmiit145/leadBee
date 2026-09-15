@@ -19,33 +19,51 @@ import { PERMISSIONS } from '../../config/constants.js';
 
 const security = [{ tenantToken: [] }];
 
+/**
+ * Who reaches these routes at all. What each person may do with one task —
+ * open it, move its status, edit or delete it — is decided per task in the
+ * service (modules/work/workAccess.ts).
+ */
+const TASK_ACCESS = [PERMISSIONS.TASKS_VIEW, PERMISSIONS.TASKS_MANAGE];
+
+const statusEnum = z.enum(TASK_STATUS_ORDER as [string, ...string[]]);
+
 const checklistItem = z.object({
-  text: z.string().trim().min(1),
+  _id: objectIdSchema.optional(),
+  text: z.string().trim().min(1).max(500),
   done: z.boolean().optional(),
 });
 
 const taskLabel = z.object({
-  name: z.string().trim().min(1),
-  color: z.string().trim().min(1),
+  name: z.string().trim().min(1).max(40),
+  color: z.string().trim().min(1).max(20),
 });
 
 const createTaskBody = z.object({
-  subject: z.string().trim().min(1, 'Subject is required'),
-  description: z.string().trim().optional(),
+  subject: z.string().trim().min(1, 'Subject is required').max(200),
+  description: z.string().trim().max(5000).optional(),
   startDate: z.string().datetime({ offset: true }),
   endDate: z.string().datetime({ offset: true }),
-  status: z.enum(TASK_STATUS_ORDER as [string, ...string[]]).optional(),
-  assignedTo: z.array(objectIdSchema).optional(),
-  checklist: z.array(checklistItem).optional(),
-  labels: z.array(taskLabel).optional(),
-  images: z.array(z.string()).optional(),
+  status: statusEnum.optional(),
+  assignedTo: z.array(objectIdSchema).max(50).optional(),
+  checklist: z.array(checklistItem).max(100).optional(),
+  labels: z.array(taskLabel).max(20).optional(),
+  images: z.array(z.string()).max(20).optional(),
   leadId: objectIdSchema.optional(),
+  /** Written on the create form before the task existed; authored by the caller. */
+  comments: z
+    .array(z.object({ text: z.string().trim().min(1).max(5000) }))
+    .max(50)
+    .optional(),
 });
 
-const updateTaskBody = createTaskBody.partial();
+const updateTaskBody = createTaskBody
+  .omit({ comments: true, leadId: true })
+  .partial()
+  // null unlinks the lead.
+  .extend({ leadId: objectIdSchema.nullable().optional() });
 
-const listTasksQuery = paginationQuery.extend({
-  status: z.enum(TASK_STATUS_ORDER as [string, ...string[]]).optional(),
+const taskFilters = {
   leadId: objectIdSchema.optional(),
   assignedTo: objectIdSchema.optional(),
   bucket: z.enum(['mine', 'assigned']).optional(),
@@ -53,8 +71,12 @@ const listTasksQuery = paginationQuery.extend({
   scope: z.enum(['today', 'tomorrow']).optional(),
   dateFrom: z.string().optional(),
   dateTo: z.string().optional(),
-  search: z.string().trim().optional(),
-});
+  search: z.string().trim().max(120).optional(),
+  label: z.string().trim().max(40).optional(),
+};
+
+const listTasksQuery = paginationQuery.extend({ status: statusEnum.optional(), ...taskFilters });
+const statusCountsQuery = z.object(taskFilters);
 
 export async function taskRoutes(app: FastifyInstance): Promise<void> {
   const r = app.withTypeProvider<ZodTypeProvider>();
@@ -63,22 +85,42 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
   r.route({
     method: 'GET',
     url: '/stats/status-counts',
+    preHandler: [app.requirePermission(...TASK_ACCESS)],
     schema: {
       tags: ['tasks'],
       summary: 'Task counts per status, for the filter tabs',
+      description: 'Takes the list’s filters, so the counts match the rows it shows.',
+      security,
+      querystring: statusCountsQuery,
+      response: { 200: okEnvelope, ...commonErrors },
+    },
+    handler: async (request) =>
+      ok(await taskService.statusCounts(viewerOf(request), request.query)),
+  });
+
+  r.route({
+    method: 'GET',
+    url: '/labels',
+    preHandler: [app.requirePermission(...TASK_ACCESS)],
+    schema: {
+      tags: ['tasks'],
+      summary: 'Labels in use on the tasks you can see, for the filter',
       security,
       response: { 200: okEnvelope, ...commonErrors },
     },
-    handler: async (request) => ok(await taskService.statusCounts(viewerOf(request))),
+    handler: async (request) => ok(await taskService.labels(viewerOf(request))),
   });
 
   r.route({
     method: 'GET',
     url: '/',
-    preHandler: [app.requirePermission(PERMISSIONS.TASKS_VIEW)],
+    preHandler: [app.requirePermission(...TASK_ACCESS)],
     schema: {
       tags: ['tasks'],
       summary: 'List tasks',
+      description:
+        'Organizers see every task; everyone else what is assigned to or raised by ' +
+        'them. With `leadId`, every task on that lead, for anyone who can see the lead.',
       security,
       querystring: listTasksQuery,
       response: { 200: listEnvelope, ...commonErrors },
@@ -95,9 +137,13 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
   r.route({
     method: 'POST',
     url: '/',
+    preHandler: [app.requirePermission(...TASK_ACCESS)],
     schema: {
       tags: ['tasks'],
       summary: 'Create a task',
+      description:
+        'Assignees must be active members; a linked lead must be one the caller ' +
+        'can see; the end date cannot precede the start.',
       security,
       body: createTaskBody,
       response: { 201: okEnvelope, ...commonErrors },
@@ -111,24 +157,24 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
   r.route({
     method: 'GET',
     url: '/:id',
-    preHandler: [app.requirePermission(PERMISSIONS.TASKS_VIEW)],
+    preHandler: [app.requirePermission(...TASK_ACCESS)],
     schema: {
       tags: ['tasks'],
-      summary: 'Get one task',
+      summary: 'Get one task (participants, organizers, and the owner of its lead)',
       security,
       params: idParam,
       response: { 200: okEnvelope, ...commonErrors },
     },
-    handler: async (request) => ok(await taskService.getById(request.params.id)),
+    handler: async (request) => ok(await taskService.getById(request.params.id, viewerOf(request))),
   });
 
   r.route({
     method: 'PUT',
     url: '/:id',
-    preHandler: [app.requirePermission(PERMISSIONS.TASKS_MANAGE)],
+    preHandler: [app.requirePermission(...TASK_ACCESS)],
     schema: {
       tags: ['tasks'],
-      summary: 'Update a task',
+      summary: 'Edit a task (its creator or an organizer)',
       security,
       params: idParam,
       body: updateTaskBody,
@@ -141,21 +187,29 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
   r.route({
     method: 'PATCH',
     url: '/:id/status',
+    preHandler: [app.requirePermission(...TASK_ACCESS)],
     schema: {
       tags: ['tasks'],
       summary: 'Move a task to another status',
       security,
       params: idParam,
-      body: z.object({ status: z.enum(TASK_STATUS_ORDER as [string, ...string[]]) }),
+      body: z.object({ status: statusEnum }),
       response: { 200: okEnvelope, ...commonErrors },
     },
     handler: async (request) =>
-      ok(await taskService.setStatus(request.params.id, request.body.status as TaskStatus)),
+      ok(
+        await taskService.setStatus(
+          request.params.id,
+          request.body.status as TaskStatus,
+          viewerOf(request)
+        )
+      ),
   });
 
   r.route({
     method: 'POST',
     url: '/:id/comments',
+    preHandler: [app.requirePermission(...TASK_ACCESS)],
     schema: {
       tags: ['tasks'],
       summary: 'Post a comment on a task',
@@ -177,6 +231,7 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
   r.route({
     method: 'PATCH',
     url: '/:id/checklist/:itemId',
+    preHandler: [app.requirePermission(...TASK_ACCESS)],
     schema: {
       tags: ['tasks'],
       summary: 'Toggle a checklist item',
@@ -186,23 +241,27 @@ export async function taskRoutes(app: FastifyInstance): Promise<void> {
     },
     handler: async (request) =>
       ok(
-        await taskService.toggleChecklistItem(request.params.id, request.params.itemId)
+        await taskService.toggleChecklistItem(
+          request.params.id,
+          request.params.itemId,
+          viewerOf(request)
+        )
       ),
   });
 
   r.route({
     method: 'DELETE',
     url: '/:id',
-    preHandler: [app.requirePermission(PERMISSIONS.TASKS_MANAGE)],
+    preHandler: [app.requirePermission(...TASK_ACCESS)],
     schema: {
       tags: ['tasks'],
-      summary: 'Soft-delete a task',
+      summary: 'Soft-delete a task (its creator or an organizer)',
       security,
       params: idParam,
       response: { 200: messageEnvelope, ...commonErrors },
     },
     handler: async (request) => {
-      await taskService.remove(request.params.id);
+      await taskService.remove(request.params.id, viewerOf(request));
       return message('Task deleted');
     },
   });

@@ -20,6 +20,7 @@ import { LeadCallsPanel } from '../../src/components/LeadCallsPanel';
 import { QuickReplyPanel } from '../../src/components/QuickReplyPanel';
 import { LeadDocumentsPanel } from '../../src/components/LeadDocumentsPanel';
 import { LeadClientDetailsPanel } from '../../src/components/LeadClientDetailsPanel';
+import { LeadWorkPanel } from '../../src/components/LeadWorkPanel';
 import { ScreenHeader, UnderlineTabs, StatusChip, CenterDialog } from '../../src/components/ui';
 import type { HeaderAction, UnderlineTab } from '../../src/components/ui';
 import { useAuth } from '../../src/stores/auth.store';
@@ -52,6 +53,7 @@ function composeLostReason(tag: string | null, note: string): string | undefined
 
 const TABS: UnderlineTab[] = [
   { key: 'timeline', label: 'Time Line' },
+  { key: 'work', label: 'Meetings & Tasks' },
   { key: 'quick_reply', label: 'Quick Reply' },
   { key: 'document', label: 'Document' },
   { key: 'attachment', label: 'Attachment' },
@@ -67,7 +69,7 @@ export default function LeadDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, isOrganizer } = useAuth();
+  const { isOrganizer, hasPermission } = useAuth();
   const { t } = useTranslation();
   const qc = useQueryClient();
 
@@ -84,7 +86,8 @@ export default function LeadDetailScreen() {
     staleTime: 5 * 60_000,
   });
 
-  const isAdmin = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'owner';
+  // Anyone who may edit leads edits the ones they can open — not only admins.
+  const canEditLead = hasPermission('leads.edit');
 
   const { data: lead, isLoading } = useQuery({
     queryKey: queryKeys.leads.detail(id),
@@ -96,6 +99,8 @@ export default function LeadDetailScreen() {
     qc.invalidateQueries({ queryKey: queryKeys.leads.detail(id) });
     qc.invalidateQueries({ queryKey: queryKeys.leads.all });
     qc.invalidateQueries({ queryKey: queryKeys.leads.stats });
+    // A stage change is written to the timeline by the API.
+    qc.invalidateQueries({ queryKey: queryKeys.leads.thread(id, 'timeline') });
   };
 
   const stageMutation = useMutation({
@@ -112,7 +117,7 @@ export default function LeadDetailScreen() {
     }) => leadService.updateStage(id, stage, { lostReason, nextFollowUpAt, reminderMinutesBefore }),
     onSuccess: invalidateLead,
     onError: (err: any) => {
-      Alert.alert('Error', err?.response?.data?.message || 'Failed to update stage.');
+      Alert.alert('Error', err?.response?.data?.error?.message || 'Failed to update stage.');
     },
   });
 
@@ -157,11 +162,11 @@ export default function LeadDetailScreen() {
       { icon: 'calendar-outline', accessibilityLabel: 'Schedule meeting', onPress: () => router.push(`/meeting/create?leadId=${id}`) },
       { icon: 'people-outline', accessibilityLabel: 'Create task', onPress: () => router.push(`/task/create?leadId=${id}`) },
     ];
-    if (isAdmin) {
+    if (canEditLead) {
       actions.push({ icon: 'create-outline', accessibilityLabel: 'Edit lead', onPress: () => router.push(`/lead/add?edit=${id}`) });
     }
     return actions;
-  }, [id, isAdmin, router]);
+  }, [id, canEditLead, router]);
 
   if (isLoading) {
     return (
@@ -260,6 +265,7 @@ export default function LeadDetailScreen() {
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
           >
+            {tab === 'work' && <LeadWorkPanel leadId={id} />}
             {tab === 'document' && <LeadDocumentsPanel leadId={id} kind="document" />}
             {tab === 'attachment' && <LeadDocumentsPanel leadId={id} kind="attachment" />}
             {tab === 'details' && <LeadClientDetailsPanel lead={lead} />}
@@ -325,7 +331,9 @@ export default function LeadDetailScreen() {
           multiline
         />
         <TouchableOpacity
-          style={styles.dropConfirmBtn}
+          // A drop needs a reason — a tag, a note, or both.
+          style={[styles.dropConfirmBtn, !composeLostReason(dropTag, dropReason) && styles.dropConfirmDisabled]}
+          disabled={!composeLostReason(dropTag, dropReason)}
           onPress={() => {
             stageMutation.mutate({ stage: 'drop', lostReason: composeLostReason(dropTag, dropReason) });
             setDropReasonOpen(false);
@@ -389,4 +397,5 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   dropConfirmText: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
+  dropConfirmDisabled: { opacity: 0.4 },
 });

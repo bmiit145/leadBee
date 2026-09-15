@@ -15,6 +15,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import { queryClient } from '../../src/lib/queryClient';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -578,6 +579,38 @@ export default function AddLeadScreen() {
   const [form, setForm]             = useState<FormData>(DEFAULT_FORM);
   const [submitting, setSubmitting] = useState(false);
 
+  // Editing loads the lead into this same form. Without it, "Edit lead" opened a
+  // blank create form and saving made a second lead.
+  const editQuery = useQuery({
+    queryKey: ['lead', edit ?? ''],
+    queryFn: () => leadService.getById(edit!),
+    enabled: !!edit,
+  });
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    const lead = editQuery.data;
+    if (!lead || loadedFor === lead._id) return;
+    const assigned =
+      lead.assignedTo && typeof lead.assignedTo === 'object' ? lead.assignedTo._id : lead.assignedTo ?? '';
+    setForm({
+      contactName: lead.contactName,
+      contactPhone: lead.contactPhone,
+      contactSecondPhone: lead.contactSecondPhone ?? '',
+      contactEmail: lead.contactEmail ?? '',
+      source: lead.source,
+      sourceDetail: lead.sourceDetail ?? '',
+      priority: lead.priority,
+      stage: lead.stage,
+      interestedIn: lead.interestedIn ?? '',
+      nextFollowUpAt: lead.nextFollowUpAt ? new Date(lead.nextFollowUpAt) : null,
+      notes: lead.notes ?? '',
+      estimateAmount: lead.budgetMax != null ? String(lead.budgetMax) : '',
+      assignedTo: assigned,
+    });
+    setLoadedFor(lead._id);
+  }, [editQuery.data, loadedFor]);
+
   // Picker modal state
   const [showSourcePicker, setShowSourcePicker]   = useState(false);
   const [showQualityPicker, setShowQualityPicker] = useState(false);
@@ -629,36 +662,79 @@ export default function AddLeadScreen() {
 
   // ── Submit ──
 
-  const submit = async (andCreateNew: boolean) => {
+  const refreshLeadQueries = () => {
+    void queryClient.invalidateQueries({ queryKey: ['leads'] });
+    void queryClient.invalidateQueries({ queryKey: ['leads-stats'] });
+    if (edit) void queryClient.invalidateQueries({ queryKey: ['lead', edit] });
+  };
+
+  const submit = async (andCreateNew: boolean, allowDuplicate = false) => {
     const error = validate();
     if (error) { Alert.alert('Validation', error); return; }
+    if (edit && !loadedFor) return;
+
+    const original = editQuery.data;
+    if (form.stage === 'drop' && (!edit || original?.stage !== 'drop')) {
+      // Dropping needs a reason, which the lead's own screen asks for.
+      Alert.alert(
+        'Drop from the lead screen',
+        edit
+          ? 'To drop this lead, use Drop on its detail screen and give the reason.'
+          : 'Create the lead first, then drop it from its detail screen with the reason.'
+      );
+      return;
+    }
 
     const estimate = form.estimateAmount.trim() ? Number(form.estimateAmount) : undefined;
+    const details = {
+      contactName:        form.contactName.trim(),
+      contactPhone:       form.contactPhone.trim(),
+      contactEmail:       form.contactEmail.trim() || undefined,
+      source:             form.source,
+      sourceDetail:       form.sourceDetail.trim() || undefined,
+      priority:           form.priority,
+      interestedIn:       form.interestedIn.trim() || undefined,
+      // One estimate on the form; the lead models a budget range and the
+      // list's budget filter matches on overlap, so a single figure is stored
+      // as a range of one.
+      budgetMin:          estimate,
+      budgetMax:          estimate,
+      nextFollowUpAt:     form.nextFollowUpAt ? form.nextFollowUpAt.toISOString() : undefined,
+      notes:              form.notes.trim() || undefined,
+      allowDuplicate:     allowDuplicate || undefined,
+    };
 
     try {
       setSubmitting(true);
+
+      if (edit && original) {
+        await leadService.update(edit, {
+          ...details,
+          // '' clears a second number that was removed.
+          contactSecondPhone: form.contactSecondPhone.trim(),
+          assignedTo: isOrganizer && form.assignedTo ? form.assignedTo : undefined,
+        });
+        // Stage has its own endpoint, where its transition rules apply.
+        if (form.stage !== original.stage) {
+          await leadService.updateStage(edit, form.stage);
+        }
+        refreshLeadQueries();
+        Alert.alert('Lead Updated', 'Your changes are saved.', [
+          { text: 'OK', onPress: () => router.back() },
+        ]);
+        return;
+      }
+
       await leadService.create({
-        contactName:        form.contactName.trim(),
-        contactPhone:       form.contactPhone.trim(),
+        ...details,
         contactSecondPhone: form.contactSecondPhone.trim() || undefined,
-        contactEmail:       form.contactEmail.trim() || undefined,
-        source:             form.source,
-        sourceDetail:       form.sourceDetail.trim() || undefined,
-        priority:           form.priority,
         stage:              form.stage,
-        interestedIn:       form.interestedIn.trim() || undefined,
-        // One estimate on the form; the lead models a budget range and the
-        // list's budget filter matches on overlap, so a single figure is stored
-        // as a range of one. It used to be validated and then never sent.
-        budgetMin:          estimate,
-        budgetMax:          estimate,
         assignedTo:
           isOrganizer && form.assignedTo && form.assignedTo !== user?._id
             ? form.assignedTo
             : undefined,
-        nextFollowUpAt:     form.nextFollowUpAt ? form.nextFollowUpAt.toISOString() : undefined,
-        notes:              form.notes.trim() || undefined,
       });
+      refreshLeadQueries();
 
       if (andCreateNew) {
         setForm(DEFAULT_FORM);
@@ -669,10 +745,28 @@ export default function AddLeadScreen() {
         ]);
       }
     } catch (err: any) {
-      const msg = err?.response?.data?.message
-        || err?.response?.data?.error?.message
-        || 'Failed to create lead.';
-      Alert.alert('Error', msg);
+      const apiError = err?.response?.data?.error;
+      if (apiError?.code === 'DUPLICATE_LEAD') {
+        const found = apiError.details ?? {};
+        const who = found.contactName ? ` (${found.contactName})` : '';
+        const owner = found.assignedToName ? `, assigned to ${found.assignedToName}` : '';
+        Alert.alert(
+          'Possible duplicate',
+          `Lead ${found.leadNumber}${who} already has this phone number${owner}.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            ...(found.leadId
+              ? [{ text: 'Open it', onPress: () => router.replace(`/lead/${found.leadId}`) }]
+              : []),
+            {
+              text: edit ? 'Save anyway' : 'Create anyway',
+              onPress: () => void submit(andCreateNew, true),
+            },
+          ]
+        );
+        return;
+      }
+      Alert.alert('Error', apiError?.message || (edit ? 'Failed to save the lead.' : 'Failed to create lead.'));
     } finally {
       setSubmitting(false);
     }

@@ -14,6 +14,7 @@ import {
   listDocumentsQuery,
   listLeadsQuery,
   listThreadQuery,
+  updateCallLogBody,
   updateLeadBody,
   updateStageBody,
   updateThreadItemBody,
@@ -118,9 +119,18 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
     schema: {
       tags: ['leads'],
       summary: 'Create a lead',
+      description:
+        '409 `DUPLICATE_LEAD` when an active lead already has this phone number; ' +
+        '`error.details` names it as far as the caller may see it. Resend with ' +
+        '`allowDuplicate: true` to create it anyway. A `drop` stage needs `lostReason`.',
       security,
       body: createLeadBody,
-      response: { 201: okEnvelope, ...commonErrors, 402: commonErrors[400] },
+      response: {
+        201: okEnvelope,
+        ...commonErrors,
+        402: commonErrors[400],
+        409: commonErrors[400],
+      },
     },
     handler: async (request, reply) => {
       const viewer = viewerOf(request);
@@ -255,7 +265,7 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
     preHandler: [app.requireOrganizer],
     schema: {
       tags: ['leads'],
-      summary: 'Soft-delete a lead (organizers only)',
+      summary: 'Soft-delete a lead and archive its tasks and meetings (organizers only)',
       security,
       params: idParam,
       response: { 200: messageEnvelope, ...commonErrors },
@@ -263,6 +273,24 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
     handler: async (request) => {
       await leadService.remove(request.params.id);
       return message('Lead deleted');
+    },
+  });
+
+  r.route({
+    method: 'POST',
+    url: '/:id/restore',
+    preHandler: [app.requireOrganizer],
+    schema: {
+      tags: ['leads'],
+      summary: 'Restore a deleted lead, with the work archived alongside it (organizers only)',
+      security,
+      params: idParam,
+      response: { 200: okEnvelope, ...commonErrors, 402: commonErrors[400] },
+    },
+    handler: async (request) => {
+      // A restored lead counts toward the plan again.
+      await organizationService.assertCanAddLead(request.auth!.organization);
+      return ok(await leadService.restore(request.params.id, viewerOf(request)));
     },
   });
 
@@ -314,6 +342,52 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
         viewerOf(request)
       );
       return reply.status(201).send(ok(callLog));
+    },
+  });
+
+  r.route({
+    method: 'PUT',
+    url: '/:id/call-logs/:callLogId',
+    schema: {
+      tags: ['leads'],
+      summary: 'Correct a logged call (its author or an organizer)',
+      security,
+      params: z.object({ id: objectIdSchema, callLogId: objectIdSchema }),
+      body: updateCallLogBody,
+      response: { 200: okEnvelope, ...commonErrors },
+    },
+    handler: async (request) => {
+      const { outcome, duration, calledAt, notes, nextFollowUpAt } = request.body;
+      return ok(
+        await leadService.updateCallLog(
+          request.params.id,
+          request.params.callLogId,
+          {
+            outcome,
+            duration,
+            calledAt: calledAt ? new Date(calledAt) : undefined,
+            notes,
+            nextFollowUpAt: nextFollowUpAt ? new Date(nextFollowUpAt) : undefined,
+          },
+          viewerOf(request)
+        )
+      );
+    },
+  });
+
+  r.route({
+    method: 'DELETE',
+    url: '/:id/call-logs/:callLogId',
+    schema: {
+      tags: ['leads'],
+      summary: 'Delete a logged call (its author or an organizer)',
+      security,
+      params: z.object({ id: objectIdSchema, callLogId: objectIdSchema }),
+      response: { 200: messageEnvelope, ...commonErrors },
+    },
+    handler: async (request) => {
+      await leadService.removeCallLog(request.params.id, request.params.callLogId, viewerOf(request));
+      return message('Call deleted');
     },
   });
 

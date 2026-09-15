@@ -13,6 +13,8 @@ export const NOTIFICATION_TYPES = {
   lead_assigned: 'lead',
   task_assigned: 'task',
   meeting_assigned: 'meeting',
+  meeting_rescheduled: 'meeting',
+  meeting_cancelled: 'meeting',
 } as const;
 
 export type NotificationType = keyof typeof NOTIFICATION_TYPES;

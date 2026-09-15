@@ -152,7 +152,8 @@ async function seed(): Promise<void> {
           assignedAt: new Date(now - i * day),
           // A third overdue, a third today/tomorrow, a third future.
           nextFollowUpAt: new Date(now + ((i % 6) - 2) * day),
-          isBookmarked: i % 7 === 0,
+          // A bookmark is a person's own; give a few to the lead's agent.
+          bookmarkedBy: i % 7 === 0 ? [agents[i % agents.length]] : [],
           createdBy: owner._id,
         });
       }

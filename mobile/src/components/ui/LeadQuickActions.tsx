@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Linking, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, borderRadius } from '../../theme';
+import { toDialable } from '../../utils/workFormat';
 
 interface Props {
   phone: string;
@@ -10,12 +11,6 @@ interface Props {
   bookmarkPending?: boolean;
 }
 
-/** Strips spaces/dashes and adds the India country code when it's a bare 10-digit number. */
-function toDialable(raw: string): string {
-  const digits = (raw || '').replace(/[^\d+]/g, '');
-  if (digits.startsWith('+')) return digits;
-  return digits.length === 10 ? `+91${digits}` : digits;
-}
 
 async function open(url: string, unavailable: string) {
   try {

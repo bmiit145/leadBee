@@ -21,6 +21,8 @@ export const createLeadBody = z.object({
   sourceDetail: optionalText,
   priority: z.enum(LEAD_PRIORITY_ORDER as [string, ...string[]]).optional(),
   stage: z.enum(LEAD_STAGE_ORDER as [string, ...string[]]).optional(),
+  /** Required when `stage` is `drop`. */
+  lostReason: z.string().trim().max(200).optional(),
   project: objectIdSchema.optional(),
   interestedIn: optionalText,
   budgetMin: z.coerce.number().nonnegative().optional(),
@@ -33,14 +35,18 @@ export const createLeadBody = z.object({
   nextFollowUpAt: z.string().datetime({ offset: true }).optional(),
   reminderMinutesBefore: z.array(z.number().int().min(0)).optional(),
   notes: optionalText,
+  /**
+   * Set after the person has seen the 409 `DUPLICATE_LEAD` warning and chosen
+   * to create it anyway.
+   */
+  allowDuplicate: z.boolean().optional(),
 });
 
 export const updateLeadBody = createLeadBody
   .partial()
   // Stage moves through its own endpoint so the transition guard cannot be
   // bypassed by sending `stage` to the generic update.
-  .omit({ stage: true })
-  .extend({ lostReason: optionalText });
+  .omit({ stage: true });
 
 export const updateStageBody = z.object({
   stage: z.enum(LEAD_STAGE_ORDER as [string, ...string[]]),
@@ -73,6 +79,8 @@ export const listLeadsQuery = paginationQuery.extend({
   dateTo: z.string().optional(),
   budgetMin: z.coerce.number().optional(),
   budgetMax: z.coerce.number().optional(),
+  /** Organizers only: soft-deleted leads, for restoring. */
+  deleted: booleanQuery.optional(),
 });
 
 export const createCallLogBody = z.object({
@@ -82,6 +90,8 @@ export const createCallLogBody = z.object({
   notes: optionalText,
   nextFollowUpAt: z.string().datetime({ offset: true }).optional(),
 });
+
+export const updateCallLogBody = createCallLogBody.partial();
 
 // ─── Threads ──────────────────────────────────────────────────────────────────
 

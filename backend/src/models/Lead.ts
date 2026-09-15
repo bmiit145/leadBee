@@ -35,7 +35,10 @@ export interface ILead extends Document {
   sourceDetail?: string;
   priority: LeadPriority;
   stage: LeadStage;
+  /** Why it was dropped — a drop tag's name, the agent's words, or both. */
   lostReason?: string;
+  /** The organization's drop tag the reason names, when it names one — for reporting. */
+  dropReason?: mongoose.Types.ObjectId;
 
   /** Optional grouping — a campaign, branch or product line. Purely a label for
    *  filtering; LeadBee has no inventory attached to it. */
@@ -60,7 +63,11 @@ export interface ILead extends Document {
    *  has stacked (e.g. 5 AND 120 minutes before). Mirrors Meeting. */
   reminderMinutesBefore: number[];
 
-  isBookmarked: boolean;
+  /**
+   * Who has bookmarked this lead. A bookmark is a person's own shortcut, so the
+   * API answers `isBookmarked` for the reader and never exposes this list.
+   */
+  bookmarkedBy: mongoose.Types.ObjectId[];
   notes?: string;
   callCount: number;
   latestCallLog?: LatestCallLogSnippet;
@@ -85,6 +92,7 @@ const leadSchema = new Schema<ILead>(
     priority: { type: String, enum: LEAD_PRIORITY_ORDER, default: 'warm' },
     stage: { type: String, enum: LEAD_STAGE_ORDER, default: 'new' },
     lostReason: { type: String, trim: true },
+    dropReason: { type: Schema.Types.ObjectId, ref: 'LeadDropReason' },
 
     project: { type: Schema.Types.ObjectId, ref: 'Project' },
 
@@ -104,7 +112,7 @@ const leadSchema = new Schema<ILead>(
     nextFollowUpAt: { type: Date },
     reminderMinutesBefore: { type: [Number], default: [] },
 
-    isBookmarked: { type: Boolean, default: false },
+    bookmarkedBy: { type: [{ type: Schema.Types.ObjectId, ref: 'User' }], default: [] },
     notes: { type: String, trim: true },
     callCount: { type: Number, default: 0 },
     latestCallLog: {
@@ -142,11 +150,8 @@ leadSchema.index({ organizationId: 1, stage: 1, priority: 1 });
 leadSchema.index({ organizationId: 1, interestedIn: 1, createdAt: -1 });
 // Reminder screen (today / tomorrow / overdue) and the overdue badge.
 leadSchema.index({ organizationId: 1, nextFollowUpAt: 1, stage: 1 });
-// Bookmarks screen.
-leadSchema.index(
-  { organizationId: 1, isBookmarked: 1, createdAt: -1 },
-  { partialFilterExpression: { isBookmarked: true } }
-);
+// Bookmarks screen: one person's bookmarks, newest first (multikey on bookmarkedBy).
+leadSchema.index({ organizationId: 1, bookmarkedBy: 1, createdAt: -1 });
 // Duplicate detection on intake.
 leadSchema.index({ organizationId: 1, contactPhone: 1 });
 leadSchema.index({ organizationId: 1, createdBy: 1, createdAt: -1 });

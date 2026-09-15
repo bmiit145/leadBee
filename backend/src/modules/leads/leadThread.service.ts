@@ -2,6 +2,7 @@ import { Types } from 'mongoose';
 import {
   LeadThreadItem,
   type ILeadThreadItem,
+  type LeadActivityEvent,
   type LeadThreadChannel,
 } from '../../models/LeadThreadItem.js';
 import {
@@ -11,6 +12,7 @@ import {
 } from '../../models/LeadDocument.js';
 import { Lead } from '../../models/Lead.js';
 import { AppError } from '../../lib/errors.js';
+import { logger } from '../../lib/logger.js';
 import { pageParams } from '../../lib/pagination.js';
 import type { Viewer } from './lead.service.js';
 
@@ -50,6 +52,13 @@ function assertCanMutate(
   if (viewer.isOrganizer) return;
   if (ownerId.toString() !== viewer.userId.toString()) {
     throw AppError.forbidden(`You can only ${verb} your own entries`);
+  }
+}
+
+/** History is not rewritten, by its author or anyone else. */
+function assertNotActivity(item: ILeadThreadItem): void {
+  if (item.kind === 'activity') {
+    throw AppError.forbidden('Activity entries are recorded by LeadBee and cannot be changed');
   }
 }
 
@@ -96,10 +105,42 @@ export const leadThreadService = {
     return LeadThreadItem.create({
       lead: new Types.ObjectId(leadId),
       channel,
+      kind: 'comment',
       text,
       createdByUser: viewer.userId,
       createdByName: viewer.name,
     });
+  },
+
+  /**
+   * Adds an entry to the lead's Time Line for something that happened to it.
+   *
+   * The caller has already authorized the action being recorded, so there is no
+   * access check here. Never throws: the change is saved, and a missing history
+   * line must not fail it (ARCH-15). The text is English — the event code and
+   * `meta` let the app render it another way later.
+   */
+  async recordActivity(
+    leadId: Types.ObjectId | string,
+    event: LeadActivityEvent,
+    text: string,
+    actor: Pick<Viewer, 'userId' | 'name'>,
+    meta?: Record<string, unknown>
+  ): Promise<void> {
+    try {
+      await LeadThreadItem.create({
+        lead: new Types.ObjectId(String(leadId)),
+        channel: 'timeline',
+        kind: 'activity',
+        event,
+        meta,
+        text,
+        createdByUser: actor.userId,
+        createdByName: actor.name,
+      });
+    } catch (error) {
+      logger.warn({ err: error, event, leadId: String(leadId) }, 'lead activity not recorded');
+    }
   },
 
   async update(
@@ -115,6 +156,7 @@ export const leadThreadService = {
     });
     if (!item) throw AppError.notFound('Thread item not found');
 
+    assertNotActivity(item);
     assertCanMutate(item.createdByUser, viewer, 'edit');
     item.text = text;
     item.editedAt = new Date();
@@ -148,6 +190,7 @@ export const leadThreadService = {
     });
     if (!item) throw AppError.notFound('Thread item not found');
 
+    assertNotActivity(item);
     assertCanMutate(item.createdByUser, viewer, 'delete');
     await item.deleteOne();
   },

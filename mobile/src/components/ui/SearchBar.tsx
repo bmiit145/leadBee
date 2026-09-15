@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, borderRadius } from '../../theme';
 
@@ -9,6 +9,8 @@ interface Props {
   placeholder?: string;
   /** Renders the solid filter button beside the input when provided. */
   onFilterPress?: () => void;
+  /** How many filters are applied — a badge on the filter button when above zero. */
+  filterCount?: number;
 }
 
 /** Search input, optionally paired with the solid filter button. Every list
@@ -18,6 +20,7 @@ export function SearchBar({
   onChangeText,
   placeholder = 'Search by customer name or number',
   onFilterPress,
+  filterCount = 0,
 }: Props) {
   return (
     <View style={styles.row}>
@@ -39,8 +42,17 @@ export function SearchBar({
       </View>
 
       {onFilterPress ? (
-        <TouchableOpacity style={styles.filterBtn} onPress={onFilterPress} accessibilityLabel="Filters">
+        <TouchableOpacity
+          style={styles.filterBtn}
+          onPress={onFilterPress}
+          accessibilityLabel={filterCount > 0 ? `Filters, ${filterCount} applied` : 'Filters'}
+        >
           <Ionicons name="options" size={18} color="#FFFFFF" />
+          {filterCount > 0 ? (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{filterCount}</Text>
+            </View>
+          ) : null}
         </TouchableOpacity>
       ) : null}
     </View>
@@ -70,4 +82,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  badge: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: colors.error,
+    borderWidth: 2,
+    borderColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badgeText: { fontSize: 10, fontWeight: '800', color: '#FFFFFF' },
 });

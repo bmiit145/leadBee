@@ -19,6 +19,24 @@ const EMPTY_LABEL: Record<LeadThreadChannel, string> = {
   query: 'No Queries Found',
 };
 
+/** Icons for what LeadBee records on its own; anything newer falls back to a generic mark. */
+const ACTIVITY_ICONS: Record<string, React.ComponentProps<typeof Ionicons>['name']> = {
+  lead_created: 'sparkles-outline',
+  stage_changed: 'git-branch-outline',
+  lead_reassigned: 'person-add-outline',
+  lead_restored: 'refresh-outline',
+  call_logged: 'call-outline',
+  call_updated: 'call-outline',
+  call_deleted: 'call-outline',
+  meeting_booked: 'calendar-outline',
+  meeting_rescheduled: 'time-outline',
+  meeting_completed: 'checkmark-done-outline',
+  meeting_cancelled: 'close-circle-outline',
+  meeting_reopened: 'calendar-outline',
+  task_created: 'clipboard-outline',
+  task_completed: 'checkmark-circle-outline',
+};
+
 const NOUN: Record<LeadThreadChannel, string> = {
   timeline: 'comment',
   notes: 'note',
@@ -111,6 +129,21 @@ export function LeadThreadPanel({ leadId, channel, placeholder, showCanned, head
               Showing {items.length} {items.length === 1 ? 'entry' : 'entries'}
             </Text>
             {items.map((it) => {
+              // History LeadBee recorded — a stage change, a call, a meeting. It
+              // reads as an event, and nobody can edit or delete it.
+              if (it.kind === 'activity') {
+                return (
+                  <View key={it._id} style={styles.activityRow}>
+                    <Ionicons
+                      name={ACTIVITY_ICONS[it.event ?? ''] ?? 'flash-outline'}
+                      size={14}
+                      color={colors.textSecondary}
+                    />
+                    <Text style={styles.activityText}>{it.text}</Text>
+                    <Text style={styles.activityTime}>{timeAgo(it.createdAt)}</Text>
+                  </View>
+                );
+              }
               const mine = it.createdByUser === user?._id;
               return (
                 <View key={it._id} style={styles.msgRow}>
@@ -199,6 +232,18 @@ const styles = StyleSheet.create({
   bubble: { backgroundColor: colors.surface, borderRadius: borderRadius.md, padding: spacing.sm, marginTop: 2 },
   bubbleText: { fontSize: 13, color: colors.text },
   bubbleTime: { fontSize: 10.5, color: colors.textDisabled, marginTop: 4, textAlign: 'right' },
+  activityRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: spacing.sm,
+    borderLeftWidth: 2,
+    borderLeftColor: colors.border,
+    marginLeft: spacing.sm,
+  },
+  activityText: { flex: 1, fontSize: 12.5, lineHeight: 18, color: colors.textSecondary },
+  activityTime: { fontSize: 10.5, color: colors.textDisabled },
   menu: { backgroundColor: colors.primary, borderRadius: borderRadius.lg },
   menuItemText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
 });
