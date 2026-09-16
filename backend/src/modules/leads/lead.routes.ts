@@ -5,7 +5,6 @@ import { leadService } from './lead.service.js';
 import { leadThreadService } from './leadThread.service.js';
 import {
   assignLeadBody,
-  createCallLogBody,
   createDocumentBody,
   createLeadBody,
   createThreadItemBody,
@@ -14,7 +13,6 @@ import {
   listDocumentsQuery,
   listLeadsQuery,
   listThreadQuery,
-  updateCallLogBody,
   updateLeadBody,
   updateStageBody,
   updateThreadItemBody,
@@ -317,79 +315,9 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
     },
   });
 
-  r.route({
-    method: 'POST',
-    url: '/:id/call-logs',
-    schema: {
-      tags: ['leads'],
-      summary: 'Log a call, updating the lead’s last-contacted and follow-up',
-      security,
-      params: idParam,
-      body: createCallLogBody,
-      response: { 201: okEnvelope, ...commonErrors },
-    },
-    handler: async (request, reply) => {
-      const { outcome, duration, calledAt, notes, nextFollowUpAt } = request.body;
-      const callLog = await leadService.addCallLog(
-        request.params.id,
-        {
-          outcome,
-          duration,
-          calledAt: calledAt ? new Date(calledAt) : undefined,
-          notes,
-          nextFollowUpAt: nextFollowUpAt ? new Date(nextFollowUpAt) : undefined,
-        },
-        viewerOf(request)
-      );
-      return reply.status(201).send(ok(callLog));
-    },
-  });
-
-  r.route({
-    method: 'PUT',
-    url: '/:id/call-logs/:callLogId',
-    schema: {
-      tags: ['leads'],
-      summary: 'Correct a logged call (its author or an organizer)',
-      security,
-      params: z.object({ id: objectIdSchema, callLogId: objectIdSchema }),
-      body: updateCallLogBody,
-      response: { 200: okEnvelope, ...commonErrors },
-    },
-    handler: async (request) => {
-      const { outcome, duration, calledAt, notes, nextFollowUpAt } = request.body;
-      return ok(
-        await leadService.updateCallLog(
-          request.params.id,
-          request.params.callLogId,
-          {
-            outcome,
-            duration,
-            calledAt: calledAt ? new Date(calledAt) : undefined,
-            notes,
-            nextFollowUpAt: nextFollowUpAt ? new Date(nextFollowUpAt) : undefined,
-          },
-          viewerOf(request)
-        )
-      );
-    },
-  });
-
-  r.route({
-    method: 'DELETE',
-    url: '/:id/call-logs/:callLogId',
-    schema: {
-      tags: ['leads'],
-      summary: 'Delete a logged call (its author or an organizer)',
-      security,
-      params: z.object({ id: objectIdSchema, callLogId: objectIdSchema }),
-      response: { 200: messageEnvelope, ...commonErrors },
-    },
-    handler: async (request) => {
-      await leadService.removeCallLog(request.params.id, request.params.callLogId, viewerOf(request));
-      return message('Call deleted');
-    },
-  });
+  // Calls are not typed in by hand any more: they come from the phone's own
+  // call log, matched to this lead's number (docs/adr/0005). Only reading the
+  // history stays here; the device sync writes through its own module.
 
   // ─── Threads: Time Line / Notes / Ask Query ─────────────────────────────────
   r.route({

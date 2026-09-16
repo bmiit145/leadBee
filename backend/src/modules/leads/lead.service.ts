@@ -1,6 +1,6 @@
 import { Types, type FilterQuery } from 'mongoose';
 import { Lead, type ILead } from '../../models/Lead.js';
-import { CallLog, type ICallLog } from '../../models/CallLog.js';
+import { CallLog } from '../../models/CallLog.js';
 import { Organization } from '../../models/Organization.js';
 import { User } from '../../models/User.js';
 import { Task } from '../../models/Task.js';
@@ -518,97 +518,6 @@ export const leadService = {
     return leadService.getById(leadId, viewer);
   },
 
-  async addCallLog(
-    leadId: string,
-    data: {
-      outcome: string;
-      duration?: number;
-      calledAt?: Date;
-      notes?: string;
-      nextFollowUpAt?: Date;
-    },
-    viewer: Viewer
-  ): Promise<ICallLog> {
-    const lead = await findVisibleLead(leadId, viewer);
-
-    const callLog = await CallLog.create({
-      leadId: lead._id,
-      calledBy: viewer.userId,
-      calledByName: viewer.name,
-      calledByRole: viewer.role,
-      calledAt: data.calledAt ?? new Date(),
-      duration: data.duration,
-      outcome: data.outcome,
-      notes: data.notes,
-      nextFollowUpAt: data.nextFollowUpAt,
-    });
-
-    if (data.nextFollowUpAt) {
-      await Lead.updateOne({ _id: lead._id }, { $set: { nextFollowUpAt: data.nextFollowUpAt } });
-    }
-    await refreshCallSummary(lead._id);
-
-    await leadThreadService.recordActivity(
-      lead._id,
-      'call_logged',
-      `${viewer.name} logged a call: ${stageLabel(callLog.outcome)}` +
-        (callLog.notes ? ` — ${callLog.notes}` : ''),
-      viewer,
-      { callLogId: callLog._id.toString(), outcome: callLog.outcome }
-    );
-
-    return callLog;
-  },
-
-  /** Correcting a call: its author, or an organizer. */
-  async updateCallLog(
-    leadId: string,
-    callLogId: string,
-    data: {
-      outcome?: string;
-      duration?: number;
-      calledAt?: Date;
-      notes?: string;
-      nextFollowUpAt?: Date;
-    },
-    viewer: Viewer
-  ): Promise<ICallLog> {
-    const lead = await findVisibleLead(leadId, viewer);
-    const callLog = await findOwnCallLog(lead._id, callLogId, viewer, 'change');
-
-    if (data.outcome !== undefined) callLog.set('outcome', data.outcome);
-    if (data.duration !== undefined) callLog.duration = data.duration;
-    if (data.calledAt !== undefined) callLog.calledAt = data.calledAt;
-    if (data.notes !== undefined) callLog.notes = data.notes || undefined;
-    if (data.nextFollowUpAt !== undefined) callLog.nextFollowUpAt = data.nextFollowUpAt;
-    await callLog.save();
-
-    await refreshCallSummary(lead._id);
-    await leadThreadService.recordActivity(
-      lead._id,
-      'call_updated',
-      `${viewer.name} corrected a call to ${stageLabel(callLog.outcome)}`,
-      viewer,
-      { callLogId: callLog._id.toString() }
-    );
-    return callLog;
-  },
-
-  async removeCallLog(leadId: string, callLogId: string, viewer: Viewer): Promise<void> {
-    const lead = await findVisibleLead(leadId, viewer);
-    const callLog = await findOwnCallLog(lead._id, callLogId, viewer, 'delete');
-    await callLog.deleteOne();
-
-    await refreshCallSummary(lead._id);
-    await leadThreadService.recordActivity(
-      lead._id,
-      'call_deleted',
-      `${viewer.name} deleted a logged call`,
-      viewer,
-      { callLogId }
-    );
-  },
-
   async listCallLogs(leadId: string, viewer: Viewer, page = 1, limit = 20) {
     const lead = await findVisibleLead(leadId, viewer);
 
@@ -775,26 +684,12 @@ async function announceReassignment(
   );
 }
 
-async function findOwnCallLog(
-  leadId: Types.ObjectId,
-  callLogId: string,
-  viewer: Viewer,
-  verb: 'change' | 'delete'
-) {
-  if (!Types.ObjectId.isValid(callLogId)) throw AppError.notFound('Call log not found');
-  const callLog = await CallLog.findOne({ _id: callLogId, leadId });
-  if (!callLog) throw AppError.notFound('Call log not found');
-  if (!viewer.isOrganizer && !callLog.calledBy.equals(viewer.userId)) {
-    throw AppError.forbidden(`You can only ${verb} calls you logged`);
-  }
-  return callLog;
-}
-
 /**
  * Recomputes the lead's denormalised call count and last call from the call
- * logs themselves, so adding, correcting and deleting a call all leave it true.
+ * logs themselves, so every write to a lead's calls leaves it true. Exported
+ * for the device-call sync, which is the only thing that writes them now.
  */
-async function refreshCallSummary(leadId: Types.ObjectId): Promise<void> {
+export async function refreshCallSummary(leadId: Types.ObjectId): Promise<void> {
   const [count, latest] = await Promise.all([
     CallLog.countDocuments({ leadId }),
     CallLog.findOne({ leadId }).sort({ calledAt: -1 }).lean(),

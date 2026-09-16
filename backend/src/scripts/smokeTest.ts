@@ -221,24 +221,23 @@ async function main(): Promise<void> {
   });
   check('Thread entry can be posted', thread.statusCode === 201, thread.json());
 
-  const callLog = await app.inject({
+  // Calls come from the phone's own call log now; nothing types one in.
+  const handTypedCall = await app.inject({
     method: 'POST',
     url: `/api/v1/leads/${leadId}/call-logs`,
     headers: ownerAuth,
     payload: { outcome: 'answered', duration: 120, notes: 'Spoke briefly' },
   });
-  check('Call log can be added', callLog.statusCode === 201, callLog.json());
-
-  const afterCall = await app.inject({
+  const callHistory = await app.inject({
     method: 'GET',
-    url: `/api/v1/leads/${leadId}`,
+    url: `/api/v1/leads/${leadId}/call-logs`,
     headers: ownerAuth,
   });
   check(
-    'Call log denormalises onto the lead',
-    afterCall.json()?.data?.callCount === 1 &&
-      afterCall.json()?.data?.latestCallLog?.outcome === 'answered',
-    { callCount: afterCall.json()?.data?.callCount }
+    'A call cannot be typed in by hand, and the history still reads',
+    (handTypedCall.statusCode === 404 || handTypedCall.statusCode === 405) &&
+      callHistory.statusCode === 200,
+    [handTypedCall.statusCode, callHistory.statusCode]
   );
 
   // ─── Agent visibility ───────────────────────────────────────────────────────
@@ -938,25 +937,50 @@ async function main(): Promise<void> {
     tasksByCustomer.json()?.total
   );
 
-  // ─── Call logs ────────────────────────────────────────────────────────────
-  const call = await inject('POST', `/api/v1/leads/${agentLeadId}/call-logs`, agentAuth, { outcome: 'answered' });
-  const callId = call.json()?.data?._id as string;
-  const correctedCall = await inject('PUT', `/api/v1/leads/${agentLeadId}/call-logs/${callId}`, agentAuth, {
-    outcome: 'busy',
-  });
-  const afterCorrection = await inject('GET', `/api/v1/leads/${agentLeadId}`, agentAuth);
+  // ─── Calls placed from the app ────────────────────────────────────────────
+  const placedCall = await inject('POST', '/api/v1/calls', agentAuth, { leadId: agentLeadId });
+  const placedCallId = placedCall.json()?.data?._id as string;
   check(
-    'A logged call can be corrected, and the lead’s last call follows',
-    correctedCall.statusCode === 200 && afterCorrection.json()?.data?.latestCallLog?.outcome === 'busy',
-    afterCorrection.json()?.data?.latestCallLog
+    'A call placed from the app is recorded against its lead, outgoing',
+    placedCall.statusCode === 201 &&
+      placedCall.json()?.data?.direction === 'outgoing' &&
+      placedCall.json()?.data?.source === 'app',
+    placedCall.json()?.data
   );
 
-  const deletedCall = await inject('DELETE', `/api/v1/leads/${agentLeadId}/call-logs/${callId}`, agentAuth);
-  const afterCallDelete = await inject('GET', `/api/v1/leads/${agentLeadId}`, agentAuth);
+  const completedCall = await inject('PATCH', `/api/v1/calls/${placedCallId}`, agentAuth, {
+    durationSeconds: 95,
+    outcome: 'answered',
+  });
+  const leadAfterCall = await inject('GET', `/api/v1/leads/${agentLeadId}`, agentAuth);
   check(
-    'A logged call can be deleted, and the call count follows',
-    deletedCall.statusCode === 200 && afterCallDelete.json()?.data?.callCount === 0,
-    afterCallDelete.json()?.data?.callCount
+    'Completing a call stores its duration and counts as contact on the lead',
+    completedCall.statusCode === 200 &&
+      completedCall.json()?.data?.duration === 95 &&
+      leadAfterCall.json()?.data?.callCount === 1 &&
+      Boolean(leadAfterCall.json()?.data?.lastContactedAt),
+    [completedCall.json()?.data?.duration, leadAfterCall.json()?.data?.callCount]
+  );
+
+  const strangerCompletes = await inject('PATCH', `/api/v1/calls/${placedCallId}`, ownerAuth, {
+    durationSeconds: 5,
+  });
+  check(
+    'Only the person who made a call can complete it',
+    strangerCompletes.statusCode === 403,
+    strangerCompletes.statusCode
+  );
+
+  const callList = await inject('GET', `/api/v1/calls?leadId=${agentLeadId}&limit=50`, agentAuth);
+  const callStats = await inject('GET', '/api/v1/calls/stats', agentAuth);
+  const callDaily = await inject('GET', '/api/v1/calls/daily', agentAuth);
+  check(
+    'Calls list, count and talk time agree, and the day series carries the call',
+    idsOf(callList).includes(placedCallId) &&
+      (callStats.json()?.data?.byDirection?.outgoing?.calls ?? 0) >= 1 &&
+      (callStats.json()?.data?.byDirection?.outgoing?.seconds ?? 0) >= 95 &&
+      (callDaily.json()?.data ?? []).some((d: { calls: number }) => d.calls >= 1),
+    [callStats.json()?.data, callDaily.json()?.data]
   );
 
   // ─── Delete and restore ───────────────────────────────────────────────────

@@ -162,22 +162,6 @@ export const leadService = {
     return res.data;
   },
 
-  async addCallLog(leadId: string, data: CallLogData): Promise<CallLog> {
-    const res = await api.post<ApiResponse<CallLog>>(`/leads/${leadId}/call-logs`, data);
-    return res.data.data;
-  },
-
-  /** Its author or an organizer. */
-  async updateCallLog(leadId: string, callLogId: string, data: Partial<CallLogData>): Promise<CallLog> {
-    const res = await api.put<ApiResponse<CallLog>>(`/leads/${leadId}/call-logs/${callLogId}`, data);
-    return res.data.data;
-  },
-
-  /** Its author or an organizer. */
-  async deleteCallLog(leadId: string, callLogId: string): Promise<void> {
-    await api.delete(`/leads/${leadId}/call-logs/${callLogId}`);
-  },
-
   /** `assignedTo` narrows the counts to one member's book — organizers only; the
    *  API ignores it for anyone else. */
   async getDashboardStats(

@@ -16,7 +16,10 @@ import { leadService } from '../../src/services/lead.service';
 import { SetReminderDialog } from '../../src/components/SetReminderDialog';
 import { LeadDetailHeader } from '../../src/components/LeadDetailHeader';
 import { LeadThreadPanel } from '../../src/components/LeadThreadPanel';
-import { LeadCallsPanel } from '../../src/components/LeadCallsPanel';
+// Call tracking is switched off in the app until it is built for real — the
+// decision and the platform limits are in docs/CALL-TRACKING-PLATFORMS.md.
+// Everything below stays; uncomment these three places to bring it back.
+// import { LeadCallsPanel } from '../../src/components/LeadCallsPanel';
 import { QuickReplyPanel } from '../../src/components/QuickReplyPanel';
 import { LeadDocumentsPanel } from '../../src/components/LeadDocumentsPanel';
 import { LeadClientDetailsPanel } from '../../src/components/LeadClientDetailsPanel';
@@ -60,7 +63,7 @@ const TABS: UnderlineTab[] = [
   { key: 'details', label: 'Client Details' },
   { key: 'ask_query', label: 'Ask Query' },
   { key: 'notes', label: 'Notes' },
-  { key: 'calls', label: 'Calls' },
+  // { key: 'calls', label: 'Calls' },   // call tracking: switched off for now
 ];
 
 const THREAD_TABS = new Set(['timeline', 'ask_query', 'notes']);
@@ -269,7 +272,7 @@ export default function LeadDetailScreen() {
             {tab === 'document' && <LeadDocumentsPanel leadId={id} kind="document" />}
             {tab === 'attachment' && <LeadDocumentsPanel leadId={id} kind="attachment" />}
             {tab === 'details' && <LeadClientDetailsPanel lead={lead} />}
-            {tab === 'calls' && <LeadCallsPanel leadId={id} />}
+            {/* {tab === 'calls' && <LeadCallsPanel leadId={id} />} */}
           </ScrollView>
         )}
       </View>

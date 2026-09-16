@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import {
-  CALL_OUTCOME_ORDER,
   LEAD_PRIORITY_ORDER,
   LEAD_SOURCE_ORDER,
   LEAD_STAGE_ORDER,
@@ -82,16 +81,6 @@ export const listLeadsQuery = paginationQuery.extend({
   /** Organizers only: soft-deleted leads, for restoring. */
   deleted: booleanQuery.optional(),
 });
-
-export const createCallLogBody = z.object({
-  outcome: z.enum(CALL_OUTCOME_ORDER as [string, ...string[]]),
-  duration: z.coerce.number().int().min(0).optional(),
-  calledAt: z.string().datetime({ offset: true }).optional(),
-  notes: optionalText,
-  nextFollowUpAt: z.string().datetime({ offset: true }).optional(),
-});
-
-export const updateCallLogBody = createCallLogBody.partial();
 
 // ─── Threads ──────────────────────────────────────────────────────────────────
 

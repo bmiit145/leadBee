@@ -258,17 +258,29 @@ function AgentLeadsHome({ stats, userName }: { stats: LeadDashboardStats | undef
   const newLeadsCount = stats?.byStage.new ?? 0;
   const { pillWidth, textOpacity } = useAlertPillAnim(newLeadsCount);
 
-  const callCards = [
-    { label: 'All Calls\n(0h 0m)',  icon: 'call-outline' as const },
-    { label: 'Incoming\n(0h 0m)',   icon: 'call-outline' as const },
-    { label: 'Outgoing\n(0h 0m)',   icon: 'call-outline' as const },
-    { label: 'Missed\n(0h 0m)',     icon: 'call-outline' as const },
-  ];
+  /**
+   * Today's Call Tracking is switched off in the app until call tracking is
+   * built for real: on the Play Store the phone's call log is off limits, so
+   * the row could only ever show dashes. The decision and what each platform
+   * can measure are in docs/CALL-TRACKING-PLATFORMS.md.
+   *
+   * Kept, not deleted — uncomment this and the section in the markup below.
+   */
+  // const callCards = [
+  //   { label: 'All Calls', icon: 'call-outline' as const },
+  //   { label: 'Incoming', icon: 'arrow-down-outline' as const },
+  //   { label: 'Outgoing', icon: 'arrow-up-outline' as const },
+  //   { label: 'Missed', icon: 'close-circle-outline' as const },
+  // ];
 
   const exploreItems = [
-    { label: 'Leads',   icon: 'people-outline' as const,         color: '#2196F3', bg: '#E3F2FD', soon: false, onPress: () => router.push('/lead/list') },
-    { label: 'Tasks',   icon: 'clipboard-outline' as const,       color: '#9C27B0', bg: '#F3E5F5', soon: false, onPress: () => router.push('/task/list') },
-    { label: 'Meeting', icon: 'people-circle-outline' as const,   color: '#FF9800', bg: '#FFF3E0', soon: false, onPress: () => router.push('/meeting/list') },
+    { label: 'Leads', icon: 'people-outline' as const, onPress: () => router.push('/lead/list') },
+    { label: 'Tasks', icon: 'clipboard-outline' as const, onPress: () => router.push('/task/list') },
+    {
+      label: 'Meeting',
+      icon: 'people-circle-outline' as const,
+      onPress: () => router.push('/meeting/list'),
+    },
   ];
 
   return (
@@ -341,22 +353,31 @@ function AgentLeadsHome({ stats, userName }: { stats: LeadDashboardStats | undef
           </View>
         </View>
 
-        <TodaysReminder />
-
-        {/* Today's Call Tracking */}
+        {/* Today's Call Tracking — switched off until call tracking is built.
         <View style={styles.sectionHeader2}>
           <Text style={styles.sectionTitle2}>Today's Call Tracking</Text>
-          <TouchableOpacity><Text style={styles.viewAll}>View All</Text></TouchableOpacity>
         </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.md, gap: 10, paddingBottom: 4 }}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.callRow}
+        >
           {callCards.map(card => (
             <View key={card.label} style={styles.callCard}>
-              <View style={styles.callBadge}><Text style={styles.callBadgeText}>00</Text></View>
-              <View style={styles.callIcon}><Ionicons name={card.icon} size={26} color="#90CAF9" /></View>
-              <Text style={styles.callLabel}>{card.label}</Text>
+              <View style={styles.callTopRow}>
+                <View style={styles.callIcon}>
+                  <Ionicons name={card.icon} size={18} color={colors.primary} />
+                </View>
+                <Text style={styles.callCount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+                  —
+                </Text>
+              </View>
+              <Text style={styles.callLabel} numberOfLines={1}>{card.label}</Text>
+              <Text style={styles.callDuration} numberOfLines={1}>—</Text>
             </View>
           ))}
         </ScrollView>
+        */}
 
         {/* Create New Lead */}
         <TouchableOpacity style={styles.createLeadBtn} onPress={() => router.push('/lead/add')} activeOpacity={0.85}>
@@ -370,21 +391,22 @@ function AgentLeadsHome({ stats, userName }: { stats: LeadDashboardStats | undef
           {exploreItems.map(item => (
             <TouchableOpacity
               key={item.label}
-              style={[styles.exploreCard, { backgroundColor: item.bg }]}
+              style={styles.exploreCard}
               onPress={item.onPress}
-              activeOpacity={item.soon ? 1 : 0.8}
-              disabled={item.soon}
+              activeOpacity={0.75}
+              accessibilityRole="button"
             >
-              <View style={[styles.exploreIconWrap, { backgroundColor: item.color + '25' }]}>
-                <Ionicons name={item.icon} size={30} color={item.color} />
+              <View style={styles.exploreIconWrap}>
+                <Ionicons name={item.icon} size={22} color={colors.primary} />
               </View>
-              <Text style={[styles.exploreLabel, { color: item.color }]}>{item.label}</Text>
-              {item.soon && (
-                <View style={styles.exploreSoon}><Text style={styles.exploreSoonText}>SOON</Text></View>
-              )}
+              <Text style={styles.exploreLabel}>{item.label}</Text>
             </TouchableOpacity>
           ))}
         </View>
+
+        {/* Last on the screen: what is due today is the thing to come back to,
+            after the shortcuts that start new work. */}
+        <TodaysReminder />
       </ScrollView>
 
       {/* Drawer rendered over the screen */}
@@ -580,11 +602,36 @@ const styles = StyleSheet.create({
 
   // Today's Reminder
   reminderEmptyText: { fontSize: 13, color: colors.textSecondary, textAlign: 'center', paddingVertical: spacing.md },
-  callCard: { width: 110, backgroundColor: '#fff', borderRadius: 14, padding: 12, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 1 },
-  callBadge: { position: 'absolute', top: -6, right: -6, backgroundColor: '#FF4444', width: 24, height: 24, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
-  callBadgeText: { fontSize: 10, fontWeight: '800', color: '#fff' },
-  callIcon: { width: 52, height: 52, borderRadius: 26, backgroundColor: '#EEF6FF', justifyContent: 'center', alignItems: 'center', marginBottom: 6 },
-  callLabel: { fontSize: 11, color: colors.textSecondary, textAlign: 'center', lineHeight: 15 },
+  // Scrolls sideways, so a fifth counter can join without squeezing the rest.
+  callRow: { paddingHorizontal: spacing.md, gap: 10, paddingBottom: 4, marginBottom: 4 },
+  callCard: {
+    width: 132,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    gap: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  callTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  // The count sits inside the card; the old badge hung outside it and was clipped.
+  callIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: `${colors.primary}0D`,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  callCount: { flex: 1, textAlign: 'right', fontSize: 20, fontWeight: '800', color: colors.text },
+  callLabel: { fontSize: 13, fontWeight: '700', color: colors.text, marginTop: 8 },
+  callDuration: { fontSize: 11.5, color: colors.textSecondary },
 
   // Create lead
   createLeadBtn: {
@@ -602,10 +649,31 @@ const styles = StyleSheet.create({
   createLeadBtnText: { fontSize: 17, fontWeight: '800', color: '#fff' },
 
   // Explore
+  // One card per destination: black on white like the rest of the app.
   exploreRow: { flexDirection: 'row', paddingHorizontal: spacing.md, gap: 10, marginBottom: 20 },
-  exploreCard: { flex: 1, borderRadius: borderRadius.xl, padding: 16, alignItems: 'center', gap: 8, position: 'relative' },
-  exploreIconWrap: { width: 60, height: 60, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
-  exploreLabel: { fontSize: 13, fontWeight: '800' },
-  exploreSoon: { position: 'absolute', top: 6, right: 6, backgroundColor: '#FEE2E2', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
-  exploreSoonText: { fontSize: 8, fontWeight: '800', color: '#EF4444' },
+  exploreCard: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: 18,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    gap: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 1,
+  },
+  exploreIconWrap: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: `${colors.primary}0D`,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  exploreLabel: { fontSize: 14, fontWeight: '700', color: colors.text },
 });
