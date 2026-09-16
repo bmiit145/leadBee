@@ -19,6 +19,7 @@ import { queryKeys } from '../../lib/queryKeys';
 import { Avatar, BottomSheet } from '../ui';
 import { InlineFeedback } from '../ui/InlineFeedback';
 import { colors, spacing, borderRadius } from '../../theme';
+import { tapFeedback, warningFeedback } from '../../utils/haptics';
 import type { OrganizationSummary } from '../../types';
 import { organizationMeta, organizationUnavailableReason } from './organizationLabels';
 
@@ -101,11 +102,15 @@ export function useQuickOrganizationSwitch(): () => Promise<QuickSwitchResult> {
       const next = open[(current + 1) % open.length];
       if (!next || next._id === organization?._id) return 'no-other';
 
+      // The switch takes a moment; the buzz says the gesture landed, rather
+      // than leaving the tap feeling ignored until the overlay appears.
+      tapFeedback();
       await switchOrganization(next._id, next.name);
       // The organization just opened, from wherever the gesture happened.
       router.replace('/(leads)');
       return 'switched';
     } catch (error) {
+      warningFeedback();
       Alert.alert(
         t('organizations.switchFailed'),
         apiErrorMessage(error, t('organizations.switchFailed'))

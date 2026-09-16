@@ -8,6 +8,7 @@ import {
   useOrganizationSwitcher,
   useQuickOrganizationSwitch,
 } from '../../src/components/organizations/OrganizationSwitcher';
+import { selectionFeedback } from '../../src/utils/haptics';
 import { colors, borderRadius } from '../../src/theme';
 
 /** Two taps closer together than this are a double tap, not two visits to Profile. */
@@ -117,6 +118,11 @@ function ProfileTabButton({ focused, onPress, ...rest }: TabButtonProps) {
   const switchToNext = useQuickOrganizationSwitch();
   const lastPressAt = useRef(0);
 
+  const handleLongPress = () => {
+    selectionFeedback();
+    openSwitcher();
+  };
+
   const handlePress = (event: GestureResponderEvent) => {
     const now = Date.now();
     const isDoubleTap = now - lastPressAt.current < DOUBLE_TAP_MS;
@@ -137,7 +143,7 @@ function ProfileTabButton({ focused, onPress, ...rest }: TabButtonProps) {
       {...rest}
       focused={focused}
       onPress={handlePress}
-      onLongPress={openSwitcher}
+      onLongPress={handleLongPress}
       accessibilityHint={t('organizations.tabGestureHint')}
     />
   );
