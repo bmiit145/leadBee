@@ -332,6 +332,7 @@
     "title": "Organizations",
     "subtitle": "Every organization you belong to, with one sign-in.",
     "switcherTitle": "Switch organization",
+    "tabGestureHint": "Double tap to switch organization. Press and hold for the list.",
     "openSwitcher": "Switch organization. Current: {{name}}",
     "manage": "Manage organizations",
     "create": "Create organization",

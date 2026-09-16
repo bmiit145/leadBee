@@ -3,7 +3,15 @@ import { Text, StyleSheet, Animated, Pressable, GestureResponderEvent } from 're
 import { Tabs, useSegments } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTranslation } from 'react-i18next';
+import {
+  useOrganizationSwitcher,
+  useQuickOrganizationSwitch,
+} from '../../src/components/organizations/OrganizationSwitcher';
 import { colors, borderRadius } from '../../src/theme';
+
+/** Two taps closer together than this are a double tap, not two visits to Profile. */
+const DOUBLE_TAP_MS = 320;
 
 interface TabButtonProps {
   icon: string;
@@ -11,8 +19,11 @@ interface TabButtonProps {
   label: string;
   tint?: string;
   focused: boolean;
-  onPress?: (e: GestureResponderEvent) => void;
+  // React Navigation hands these down as null when a tab has no handler.
+  onPress?: ((e: GestureResponderEvent) => void) | null;
+  onLongPress?: ((e: GestureResponderEvent) => void) | null;
   accessibilityLabel?: string;
+  accessibilityHint?: string;
 }
 
 /**
@@ -29,7 +40,9 @@ function LeadTabButton({
   tint = colors.primary,
   focused,
   onPress,
+  onLongPress,
   accessibilityLabel,
+  accessibilityHint,
 }: TabButtonProps) {
   // 0 = inactive (icon only), 1 = active (pill + label).
   const anim = useRef(new Animated.Value(focused ? 1 : 0)).current;
@@ -47,9 +60,11 @@ function LeadTabButton({
     <Pressable
       style={styles.item}
       onPress={onPress}
+      onLongPress={onLongPress}
       accessibilityRole="tab"
       accessibilityState={{ selected: focused }}
       accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityHint={accessibilityHint}
     >
       <Animated.View
         style={[
@@ -84,6 +99,47 @@ function LeadTabButton({
         </Animated.Text>
       </Animated.View>
     </Pressable>
+  );
+}
+
+/**
+ * The Profile tab, which also carries the organization gestures.
+ *
+ * Double tap moves to the next organization and press-and-hold opens the
+ * switcher — the pair Instagram uses for accounts, so people arrive already
+ * knowing them. With nowhere to switch to, a double tap opens the switcher
+ * instead of doing nothing, which is where an organization is created or
+ * joined.
+ */
+function ProfileTabButton({ focused, onPress, ...rest }: TabButtonProps) {
+  const { t } = useTranslation();
+  const { openSwitcher } = useOrganizationSwitcher();
+  const switchToNext = useQuickOrganizationSwitch();
+  const lastPressAt = useRef(0);
+
+  const handlePress = (event: GestureResponderEvent) => {
+    const now = Date.now();
+    const isDoubleTap = now - lastPressAt.current < DOUBLE_TAP_MS;
+    // Reset after a double tap, so three taps are not two switches.
+    lastPressAt.current = isDoubleTap ? 0 : now;
+
+    // The first tap still opens Profile; the second one switches from there.
+    onPress?.(event);
+    if (!isDoubleTap) return;
+
+    void switchToNext().then((result) => {
+      if (result === 'no-other') openSwitcher();
+    });
+  };
+
+  return (
+    <LeadTabButton
+      {...rest}
+      focused={focused}
+      onPress={handlePress}
+      onLongPress={openSwitcher}
+      accessibilityHint={t('organizations.tabGestureHint')}
+    />
   );
 }
 
@@ -168,7 +224,7 @@ export default function LeadsTabLayout() {
         name="profile"
         options={{
           tabBarButton: (p) => (
-            <LeadTabButton
+            <ProfileTabButton
               {...p}
               icon="person-circle-outline"
               activeIcon="person-circle"

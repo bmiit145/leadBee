@@ -1,13 +1,14 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
@@ -59,6 +60,61 @@ export function OrganizationSwitcherProvider({ children }: { children: React.Rea
       <OrganizationSwitcherSheet visible={visible} onDismiss={() => setVisible(false)} />
     </SwitcherContext.Provider>
   );
+}
+
+/** What a quick switch did, so the caller can offer the sheet when there is nowhere to go. */
+export type QuickSwitchResult = 'switched' | 'no-other' | 'failed';
+
+/**
+ * Two quick taps on the Profile tab move to the next organization, the way a
+ * second account is one gesture away in Instagram.
+ *
+ * The list is fetched on the gesture rather than kept warm: someone with one
+ * organization should not pay for a list they never open. Organizations they
+ * cannot open — suspended, or their access switched off — are stepped over, so
+ * the gesture never lands somewhere that immediately fails.
+ */
+export function useQuickOrganizationSwitch(): () => Promise<QuickSwitchResult> {
+  const { t } = useTranslation();
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const { organization, isAuthenticated, switchOrganization } = useAuth();
+  // A double tap can land while the first switch is still in flight.
+  const inFlight = useRef(false);
+
+  return useCallback(async () => {
+    if (!isAuthenticated || inFlight.current) return 'no-other';
+    inFlight.current = true;
+    try {
+      const overview = await queryClient.fetchQuery({
+        queryKey: queryKeys.organizations.overview,
+        queryFn: () => organizationsService.overview(),
+        staleTime: OVERVIEW_STALE_MS,
+      });
+
+      const open = overview.organizations.filter(
+        (org) => organizationUnavailableReason(org, t) === null
+      );
+      if (open.length < 2) return 'no-other';
+
+      const current = open.findIndex((org) => org.isCurrent || org._id === organization?._id);
+      const next = open[(current + 1) % open.length];
+      if (!next || next._id === organization?._id) return 'no-other';
+
+      await switchOrganization(next._id, next.name);
+      // The organization just opened, from wherever the gesture happened.
+      router.replace('/(leads)');
+      return 'switched';
+    } catch (error) {
+      Alert.alert(
+        t('organizations.switchFailed'),
+        apiErrorMessage(error, t('organizations.switchFailed'))
+      );
+      return 'failed';
+    } finally {
+      inFlight.current = false;
+    }
+  }, [isAuthenticated, organization?._id, queryClient, router, switchOrganization, t]);
 }
 
 function OrganizationSwitcherSheet({
