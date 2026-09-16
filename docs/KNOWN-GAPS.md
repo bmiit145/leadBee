@@ -477,16 +477,19 @@ onward are what that work left.
 - **Fix.** Service tests with an in-memory MongoDB for conflicts, reopening,
   lead cascade and restore.
 
-### [ ] 7.7 The lead list can show "No leads found" under a count of one — P1
+### [x] 7.7 The lead list showed "No leads found" under a count of one — P1
 
-- **What.** Going back to All Leads can show the empty state while the tabs and
-  stats show leads. The rows are copied into local state (`allLeads`) inside
-  the query function, and a cached result (30-second `staleTime`) never runs
-  that function again, so the state stays empty after the screen remounts.
-- **Where.** `mobile/app/lead/list.tsx` — the `leads` `useQuery`.
-- **Fix.** Read the rows from `useInfiniteQuery` pages, as the meeting and task
-  lists now do; keep delete and restore as cache updates, not local state.
-- **Done when.** Opening a lead and going back within 30 seconds still lists it.
+- **What.** Opening Leads (from Home or Explore) sometimes listed nothing while
+  the tabs and stats showed leads, and no request was sent at all. The rows
+  were copied into local state (`allLeads`) inside the query function, and a
+  cached result (30-second `staleTime`) never runs that function again — so on
+  a remount within that window the state stayed empty.
+- **Where.** `mobile/app/lead/list.tsx`.
+- **Fixed 2026-09-16.** The list is a `useInfiniteQuery`, so the rows live in
+  the cache and render whether or not the fetch runs; paging, pull-to-refresh
+  and the filters read from it, and delete/restore invalidate rather than
+  editing local state. Checked on a device: reopening the screen straight after
+  leaving it lists the lead every time.
 
 ### [ ] 7.8 Customer search scans leads with a regular expression — P2
 

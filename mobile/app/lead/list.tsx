@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -17,7 +17,7 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Snackbar } from 'react-native-paper';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { LeadCard } from '../../src/components/LeadCard';
@@ -127,8 +127,7 @@ export default function LeadListScreen() {
 
   const [datePickerFor, setDatePickerFor] = useState<'from' | 'to' | null>(null);
 
-  const [page, setPage]         = useState(1);
-  const [allLeads, setAllLeads] = useState<Lead[]>([]);
+  const PAGE_SIZE = 20;
 
   const statsQuery = useQuery({
     // Under the shared `leads-stats` prefix, so a lead mutation still refreshes
@@ -145,10 +144,17 @@ export default function LeadListScreen() {
   });
   const stats = statsQuery.data;
 
-  const { data, isLoading, isFetching, refetch } = useQuery({
-    queryKey: ['leads', selectedStage, applied, debouncedSearch, page, memberId],
-    queryFn: async () => {
-      const result = await leadService.getAll({
+  /**
+   * The rows live in the query cache, not in component state: state is empty
+   * on every mount, so a cached result — one the query function never runs for
+   * — used to leave the screen reading "No leads found" under a count of one.
+   * Each filter is part of the key, so changing one starts its own list.
+   */
+  const leadsQuery = useInfiniteQuery({
+    queryKey: ['leads', selectedStage, applied, debouncedSearch, memberId],
+    initialPageParam: 1,
+    queryFn: ({ pageParam }) =>
+      leadService.getAll({
         stage:           selectedStage || undefined,
         priority:        applied.priority || undefined,
         source:          applied.source   || undefined,
@@ -160,15 +166,17 @@ export default function LeadListScreen() {
         dateTo:          applied.dateTo   ? applied.dateTo.toISOString()   : undefined,
         budgetMin:       applied.budgetMin ? Number(applied.budgetMin) : undefined,
         budgetMax:       applied.budgetMax ? Number(applied.budgetMax) : undefined,
-        page,
-        limit: 20,
-      });
-      if (page === 1) setAllLeads(result.data);
-      else setAllLeads(prev => [...prev, ...result.data]);
-      return result;
-    },
+        page: pageParam,
+        limit: PAGE_SIZE,
+      }),
+    getNextPageParam: (last) => (last.page < last.totalPages ? last.page + 1 : undefined),
     staleTime: 30_000,
   });
+
+  const allLeads = useMemo(
+    () => leadsQuery.data?.pages.flatMap((p) => p.data) ?? [],
+    [leadsQuery.data]
+  );
 
   const queryClient = useQueryClient();
   // The lead just deleted, while its Undo is on screen.
@@ -177,8 +185,8 @@ export default function LeadListScreen() {
   const deleteMutation = useMutation({
     mutationFn: (lead: Lead) => leadService.remove(lead._id),
     onSuccess: (_result, lead) => {
-      setAllLeads((prev) => prev.filter((l) => l._id !== lead._id));
       setLastDeleted(lead);
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
       queryClient.invalidateQueries({ queryKey: ['leads-stats'] });
       // Its meetings and tasks were archived with it.
       queryClient.invalidateQueries({ queryKey: ['meetings'] });
@@ -190,9 +198,9 @@ export default function LeadListScreen() {
 
   const restoreMutation = useMutation({
     mutationFn: (lead: Lead) => leadService.restore(lead._id),
-    onSuccess: (restored) => {
+    onSuccess: () => {
       setLastDeleted(null);
-      setAllLeads((prev) => [restored, ...prev.filter((l) => l._id !== restored._id)]);
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
       queryClient.invalidateQueries({ queryKey: ['leads-stats'] });
       queryClient.invalidateQueries({ queryKey: ['meetings'] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
@@ -208,38 +216,31 @@ export default function LeadListScreen() {
     ]);
   };
 
+  // Each of these is part of the query key, so changing one starts that
+  // filter's own list from page one — nothing to reset by hand.
   const handleSearch = (text: string) => {
     setSearch(text);
     if (searchTimer.current) clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => {
-      setDebounced(text);
-      resetPagination();
-    }, 350);
+    searchTimer.current = setTimeout(() => setDebounced(text), 350);
   };
 
-  const resetPagination = () => { setPage(1); setAllLeads([]); };
+  const handleStageTab = (stage: LeadStage | '') => setSelectedStage(stage);
 
-  const handleStageTab = (stage: LeadStage | '') => {
-    setSelectedStage(stage);
-    resetPagination();
-  };
+  const handleMember = (id: string | null) => setMemberId(id);
 
-  const handleMember = (id: string | null) => {
-    setMemberId(id);
-    resetPagination();
-  };
-
-  const handleRefresh = useCallback(() => { resetPagination(); refetch(); }, [refetch]);
+  const handleRefresh = useCallback(() => {
+    void leadsQuery.refetch();
+    void statsQuery.refetch();
+  }, [leadsQuery, statsQuery]);
 
   const handleLoadMore = () => {
-    if (data && page < data.totalPages && !isFetching) setPage(p => p + 1);
+    if (leadsQuery.hasNextPage && !leadsQuery.isFetchingNextPage) void leadsQuery.fetchNextPage();
   };
 
   const openFilter = () => { setDraft({ ...applied }); setShowFilter(true); };
   const applyFilter = () => {
     setApplied({ ...draft });
     setShowFilter(false);
-    resetPagination();
   };
   const clearFilter = () => { setDraft(DEFAULT_FILTERS); };
 
@@ -345,7 +346,7 @@ export default function LeadListScreen() {
       />
 
       {/* Lead List */}
-      {isLoading && page === 1 ? (
+      {leadsQuery.isLoading ? (
         <View style={styles.center}>
           <ActivityIndicator color={colors.primary} size="large" />
         </View>
@@ -371,13 +372,13 @@ export default function LeadListScreen() {
           onEndReachedThreshold={0.3}
           refreshControl={
             <RefreshControl
-              refreshing={isFetching && page === 1}
+              refreshing={leadsQuery.isRefetching && !leadsQuery.isFetchingNextPage}
               onRefresh={handleRefresh}
               colors={[colors.primary]}
             />
           }
           ListFooterComponent={
-            isFetching && page > 1
+            leadsQuery.isFetchingNextPage
               ? <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
               : null
           }
