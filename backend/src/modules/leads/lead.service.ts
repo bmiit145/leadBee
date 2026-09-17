@@ -518,6 +518,36 @@ export const leadService = {
     return leadService.getById(leadId, viewer);
   },
 
+  /**
+   * Every customer number the caller can see, as digits.
+   *
+   * The phone downloads this to decide, on the device, which calls belong to a
+   * customer — so a call to anyone else is discarded before it is sent
+   * anywhere (ADR-0005). It carries numbers and ids only: no names, no notes.
+   */
+  async phoneIndex(viewer: Viewer): Promise<Array<{ leadId: string; phone: string }>> {
+    const query: FilterQuery<ILead> = { isActive: true };
+    if (!viewer.isOrganizer) {
+      query.$or = [{ assignedTo: viewer.userId }, { createdBy: viewer.userId }];
+    }
+
+    const leads = await Lead.find(query)
+      .select('contactPhone contactSecondPhone')
+      .limit(20_000)
+      .lean();
+
+    const index: Array<{ leadId: string; phone: string }> = [];
+    for (const lead of leads) {
+      for (const phone of [lead.contactPhone, lead.contactSecondPhone]) {
+        const digits = (phone ?? '').replace(/\D/g, '');
+        // The last ten digits: the same number reaches the phone with and
+        // without a country code, and matching has to survive both.
+        if (digits.length >= 10) index.push({ leadId: lead._id.toString(), phone: digits.slice(-10) });
+      }
+    }
+    return index;
+  },
+
   async listCallLogs(leadId: string, viewer: Viewer, page = 1, limit = 20) {
     const lead = await findVisibleLead(leadId, viewer);
 

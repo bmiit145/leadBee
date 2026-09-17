@@ -98,13 +98,19 @@ export function LeadDrawer({ visible, onClose }: Props) {
   const directItems = [
     { label: 'Meeting', icon: 'people-circle-outline' as const, onPress: () => nav('/meeting/list') },
     { label: 'BookMarks', icon: 'bookmark-outline' as const, onPress: () => nav('/bookmarks') },
+    // Call Report, as two destinations rather than a group that has to be expanded.
+    { label: t('calls.title'), icon: 'call-outline' as const, onPress: () => nav('/call') },
+    {
+      label: t('calls.analytics.title'),
+      icon: 'bar-chart-outline' as const,
+      onPress: () => nav('/call/analytics'),
+    },
     { label: t('drawer.notifications'), icon: 'notifications-outline' as const, onPress: () => nav('/notifications') },
     { label: t('drawer.quickReplies'), icon: 'chatbubble-outline' as const, onPress: () => nav('/quick-replies') },
     { label: t('drawer.documents'), icon: 'document-outline' as const, onPress: () => nav('/documents') },
   ];
 
   const comingSoon = [
-    { label: 'Call Tracking', icon: 'call-outline' as const },
     { label: 'Announcement', icon: 'megaphone-outline' as const },
     { label: 'Attendance', icon: 'calendar-outline' as const },
   ];

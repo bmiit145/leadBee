@@ -48,6 +48,21 @@ const recordCallBody = z.object({
   outcome: z.enum(CALL_OUTCOME_ORDER as [string, ...string[]]).optional(),
 });
 
+const syncCallsBody = z.object({
+  calls: z
+    .array(
+      z.object({
+        deviceCallId: z.string().trim().min(1).max(64),
+        leadId: objectIdSchema,
+        phoneNumber: z.string().trim().max(32),
+        direction: z.enum(CALL_DIRECTION_ORDER as unknown as [string, ...string[]]),
+        calledAt: z.string().datetime({ offset: true }),
+        durationSeconds: z.coerce.number().int().min(0).max(86_400).optional(),
+      })
+    )
+    .max(500),
+});
+
 const completeCallBody = z.object({
   durationSeconds: z.coerce.number().int().min(0).max(86_400).optional(),
   outcome: z.enum(CALL_OUTCOME_ORDER as [string, ...string[]]).optional(),
@@ -86,6 +101,20 @@ export async function callRoutes(app: FastifyInstance): Promise<void> {
       response: { 200: okEnvelope, ...commonErrors },
     },
     handler: async (request) => ok(await callService.daily(request.query, viewerOf(request))),
+  });
+
+  r.route({
+    method: 'GET',
+    url: '/activity',
+    preHandler: [app.requirePermission(...CALL_ACCESS)],
+    schema: {
+      tags: ['calls'],
+      summary: 'Who called, and which customers were called most',
+      security,
+      querystring: statsQuery,
+      response: { 200: okEnvelope, ...commonErrors },
+    },
+    handler: async (request) => ok(await callService.activity(request.query, viewerOf(request))),
   });
 
   r.route({
@@ -138,6 +167,36 @@ export async function callRoutes(app: FastifyInstance): Promise<void> {
       );
       return reply.status(201).send(ok(call));
     },
+  });
+
+  r.route({
+    method: 'POST',
+    url: '/sync',
+    preHandler: [app.requirePermission(...CALL_ACCESS)],
+    schema: {
+      tags: ['calls'],
+      summary: 'Sync calls the phone matched to a customer',
+      description:
+        'The device filters first: only calls matching a lead are sent. Writes ' +
+        'are keyed on the phone’s own call id, so re-sending a window is safe.',
+      security,
+      body: syncCallsBody,
+      response: { 200: okEnvelope, ...commonErrors },
+    },
+    handler: async (request) =>
+      ok(
+        await callService.syncDevice(
+          request.body.calls.map((call) => ({
+            deviceCallId: call.deviceCallId,
+            leadId: call.leadId,
+            phoneNumber: call.phoneNumber,
+            direction: call.direction as CallDirection,
+            calledAt: new Date(call.calledAt),
+            durationSeconds: call.durationSeconds,
+          })),
+          viewerOf(request)
+        )
+      ),
   });
 
   r.route({

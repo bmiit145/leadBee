@@ -25,6 +25,9 @@ import { ViewModeSwitchButton } from '../../src/components/ViewModeSwitch';
 import { NotificationBell } from '../../src/components/NotificationBell';
 import { userService } from '../../src/services/user.service';
 import { queryKeys } from '../../src/lib/queryKeys';
+import { callService } from '../../src/services/call.service';
+import { callTracking } from '../../src/services/callTracking';
+import { talkTime } from '../call/index';
 import { useTranslation } from 'react-i18next';
 
 const HEADER_BG = '#111827';
@@ -258,20 +261,40 @@ function AgentLeadsHome({ stats, userName }: { stats: LeadDashboardStats | undef
   const newLeadsCount = stats?.byStage.new ?? 0;
   const { pillWidth, textOpacity } = useAlertPillAnim(newLeadsCount);
 
-  /**
-   * Today's Call Tracking is switched off in the app until call tracking is
-   * built for real: on the Play Store the phone's call log is off limits, so
-   * the row could only ever show dashes. The decision and what each platform
-   * can measure are in docs/CALL-TRACKING-PLATFORMS.md.
-   *
-   * Kept, not deleted — uncomment this and the section in the markup below.
-   */
-  // const callCards = [
-  //   { label: 'All Calls', icon: 'call-outline' as const },
-  //   { label: 'Incoming', icon: 'arrow-down-outline' as const },
-  //   { label: 'Outgoing', icon: 'arrow-up-outline' as const },
-  //   { label: 'Missed', icon: 'close-circle-outline' as const },
-  // ];
+  const callCards = [
+    { label: 'All Calls', icon: 'call-outline' as const, direction: null },
+    { label: 'Incoming', icon: 'arrow-down-outline' as const, direction: 'incoming' as const },
+    { label: 'Outgoing', icon: 'arrow-up-outline' as const, direction: 'outgoing' as const },
+    { label: 'Missed', icon: 'close-circle-outline' as const, direction: 'missed' as const },
+  ];
+
+  // Today's calls, but only once tracking is on. With it off, the row shows
+  // dashes: a zero would say nobody called, which the app cannot know.
+  const [callsTracked, setCallsTracked] = useState(false);
+  useEffect(() => {
+    void (async () => {
+      const consent = await callTracking.getConsent();
+      setCallsTracked(Boolean(consent) && callTracking.hasPermission());
+    })();
+  }, []);
+
+  const today = new Date();
+  const todayParam = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(
+    today.getDate()
+  ).padStart(2, '0')}`;
+
+  const callStats = useQuery({
+    queryKey: [...queryKeys.calls.all, 'stats', 'today'],
+    queryFn: () => callService.getStats({ dateFrom: todayParam, dateTo: todayParam }),
+    enabled: callsTracked,
+    staleTime: 60_000,
+  });
+
+  const callValue = (direction: 'incoming' | 'outgoing' | 'missed' | null) => {
+    if (!callsTracked || !callStats.data) return { calls: '—', time: '—' };
+    const entry = direction ? callStats.data.byDirection?.[direction] : callStats.data.total;
+    return { calls: String(entry?.calls ?? 0), time: talkTime(entry?.seconds ?? 0) };
+  };
 
   const exploreItems = [
     { label: 'Leads', icon: 'people-outline' as const, onPress: () => router.push('/lead/list') },
@@ -353,31 +376,43 @@ function AgentLeadsHome({ stats, userName }: { stats: LeadDashboardStats | undef
           </View>
         </View>
 
-        {/* Today's Call Tracking — switched off until call tracking is built.
+        {/* Today's Call Tracking */}
         <View style={styles.sectionHeader2}>
           <Text style={styles.sectionTitle2}>Today's Call Tracking</Text>
+          <TouchableOpacity onPress={() => router.push('/call')}>
+            <Text style={styles.viewAll}>View All</Text>
+          </TouchableOpacity>
         </View>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.callRow}
         >
-          {callCards.map(card => (
-            <View key={card.label} style={styles.callCard}>
-              <View style={styles.callTopRow}>
-                <View style={styles.callIcon}>
-                  <Ionicons name={card.icon} size={18} color={colors.primary} />
+          {callCards.map(card => {
+            const value = callValue(card.direction);
+            return (
+              <TouchableOpacity
+                key={card.label}
+                style={styles.callCard}
+                onPress={() => router.push('/call')}
+                activeOpacity={0.75}
+                accessibilityRole="button"
+              >
+                <View style={styles.callTopRow}>
+                  <View style={styles.callIcon}>
+                    <Ionicons name={card.icon} size={18} color={colors.primary} />
+                  </View>
+                  {/* Shrinks rather than clips, so a four-figure day still reads. */}
+                  <Text style={styles.callCount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+                    {value.calls}
+                  </Text>
                 </View>
-                <Text style={styles.callCount} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
-                  —
-                </Text>
-              </View>
-              <Text style={styles.callLabel} numberOfLines={1}>{card.label}</Text>
-              <Text style={styles.callDuration} numberOfLines={1}>—</Text>
-            </View>
-          ))}
+                <Text style={styles.callLabel} numberOfLines={1}>{card.label}</Text>
+                <Text style={styles.callDuration} numberOfLines={1}>{value.time}</Text>
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
-        */}
 
         {/* Create New Lead */}
         <TouchableOpacity style={styles.createLeadBtn} onPress={() => router.push('/lead/add')} activeOpacity={0.85}>

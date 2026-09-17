@@ -70,7 +70,10 @@ export function LeadCallsPanel({ leadId }: Props) {
             <View style={styles.headerRow}>
               <View style={styles.outcomeRow}>
                 <Ionicons name="call-outline" size={14} color={colors.textSecondary} />
-                <Text style={styles.outcome}>{OUTCOME_LABELS[log.outcome] ?? log.outcome}</Text>
+                {/* A measured call has a direction, not an outcome, until someone sets one. */}
+                <Text style={styles.outcome}>
+                  {log.outcome ? OUTCOME_LABELS[log.outcome] ?? log.outcome : log.direction ?? '—'}
+                </Text>
                 {duration ? <Text style={styles.muted}>· {duration}</Text> : null}
               </View>
               <Text style={styles.muted}>

@@ -147,6 +147,86 @@
     "noTasks": "No tasks on this lead yet.",
     "loadFailed": "Couldn't load. Pull to refresh."
   },
+  "calls": {
+    "title": "Call Tracking",
+    "searchPlaceholder": "Search by name or number",
+    "unknownNumber": "Unknown number",
+    "tabs": {
+      "all": "All Calls",
+      "incoming": "Incoming",
+      "outgoing": "Outgoing",
+      "missed": "Missed",
+      "rejected": "Rejected"
+    },
+    "ranges": {
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "last7": "Last 7 days",
+      "last30": "Last 30 days",
+      "custom": "Custom"
+    },
+    "empty": {
+      "title": "No calls yet",
+      "message": "Calls with your customers appear here.",
+      "noConsent": "Turn on call tracking to see calls with your customers here."
+    },
+    "needsConsent": {
+      "title": "Call tracking is off",
+      "body": "Only calls with customers are recorded.",
+      "action": "Turn on"
+    },
+    "analytics": {
+      "open": "Call analytics",
+      "title": "Call Analytics",
+      "calls": "Calls",
+      "talkTime": "Talk time",
+      "byDirection": "By type",
+      "perDay": "Calls per day",
+      "noData": "Nothing to chart yet",
+      "noDataMessage": "No calls with customers in this period.",
+      "topCallers": "Who called",
+      "topCustomers": "Most called customers",
+      "customRange": "Choose dates",
+      "basis": "Counts calls with customers in LeadBee. Calls with anyone else are never recorded."
+    },
+    "consent": {
+      "title": "Call tracking",
+      "heading": "Record your calls with customers",
+      "summary": "LeadBee can keep your call history with customers up to date on its own, so you never have to write a call down.",
+      "read": {
+        "title": "What is read",
+        "body": "The call log on your phone: the number, time, type of call and how long it lasted. Never the content of a call."
+      },
+      "private": {
+        "title": "What stays on your phone",
+        "body": "Your phone checks each number first. Only calls with customers in LeadBee are sent. Calls with family, friends or anyone else are discarded on the device and never uploaded."
+      },
+      "shared": {
+        "title": "Who can see them",
+        "body": "You, and the managers of your organization — the same people who already see your leads, tasks and meetings."
+      },
+      "stop": {
+        "title": "You can stop any time",
+        "body": "Turn it off in Profile → Settings → Call tracking, or in Android settings. LeadBee keeps working either way."
+      },
+      "policy": "Read how LeadBee handles call data",
+      "policyUnavailable": "Couldn't open the policy. It is also linked on the Play Store listing.",
+      "allow": "Continue",
+      "decline": "Not now",
+      "footnote": "Android only. iPhone does not allow any app to read its call history.",
+      "deniedTitle": "Permission not granted",
+      "deniedBody": "Call tracking stays off. Everything else in LeadBee works as before."
+    },
+    "settings": {
+      "title": "Call tracking",
+      "on": "On — calls with customers are recorded",
+      "off": "Off",
+      "unsupported": "Not available on this device",
+      "withdraw": "Turn off call tracking",
+      "withdrawConfirm": "Stop reading your call log? Calls already recorded stay with your organization.",
+      "withdrawn": "Call tracking is off."
+    }
+  },
   "work": {
     "all": "All",
     "overdue": "OVERDUE",

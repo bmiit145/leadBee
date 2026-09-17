@@ -34,6 +34,9 @@
         "backgroundColor": "#186F90"
       },
       "package": "com.spirit.leadbee",
+      "permissions": [
+        "android.permission.READ_CALL_LOG"
+      ],
       "blockedPermissions": [
         "android.permission.SYSTEM_ALERT_WINDOW"
       ]

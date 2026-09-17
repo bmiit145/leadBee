@@ -22,6 +22,10 @@ export const queryKeys = {
     statusCounts: ['tasks-status-counts'] as const,
     detail: (id: string) => ['task', id] as const,
   },
+  /** Every call list, counter and trend — one target to refresh after a sync. */
+  calls: {
+    all: ['calls'] as const,
+  },
   meetings: {
     all: ['meetings'] as const,
     detail: (id: string) => ['meeting', id] as const,

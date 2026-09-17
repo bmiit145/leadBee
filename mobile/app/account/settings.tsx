@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Alert, Modal } from 'react-native';
 import { Button, TextInput } from 'react-native-paper';
 import { useRouter } from 'expo-router';
@@ -9,6 +9,7 @@ import { useAuth } from '../../src/stores/auth.store';
 import { authService } from '../../src/services/auth.service';
 import { apiErrorMessage } from '../../src/services/api';
 import { ScreenHeader, ListCard, ListRow, ListSectionTitle } from '../../src/components/ui';
+import { callTracking } from '../../src/services/callTracking';
 import { colors, spacing } from '../../src/theme';
 
 /**
@@ -31,6 +32,31 @@ export default function SettingsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { logout } = useAuth();
+
+  // Withdrawing consent has to be as easy as giving it — the consent screen
+  // and the privacy policy both promise this row.
+  const [callTrackingOn, setCallTrackingOn] = useState(false);
+  useEffect(() => {
+    void (async () => {
+      const consent = await callTracking.getConsent();
+      setCallTrackingOn(Boolean(consent) && callTracking.hasPermission());
+    })();
+  }, []);
+
+  const confirmWithdrawCallTracking = () => {
+    Alert.alert(t('calls.settings.withdraw'), t('calls.settings.withdrawConfirm'), [
+      { text: t('work.cancel'), style: 'cancel' },
+      {
+        text: t('calls.settings.withdraw'),
+        style: 'destructive',
+        onPress: async () => {
+          await callTracking.withdrawConsent();
+          setCallTrackingOn(false);
+          Alert.alert(t('calls.settings.withdrawn'));
+        },
+      },
+    ]);
+  };
 
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
@@ -113,6 +139,29 @@ export default function SettingsScreen() {
             title={t('profile.changePassword')}
             subtitle={t('settings.changePasswordHint')}
             onPress={() => setPasswordOpen(true)}
+            isLast
+          />
+        </ListCard>
+
+        <ListSectionTitle>{t('calls.settings.title')}</ListSectionTitle>
+        <ListCard>
+          <ListRow
+            icon="call-outline"
+            title={t('calls.settings.title')}
+            subtitle={
+              !callTracking.isSupported
+                ? t('calls.settings.unsupported')
+                : callTrackingOn
+                  ? t('calls.settings.on')
+                  : t('calls.settings.off')
+            }
+            onPress={
+              !callTracking.isSupported
+                ? undefined
+                : callTrackingOn
+                  ? confirmWithdrawCallTracking
+                  : () => router.push('/call/consent')
+            }
             isLast
           />
         </ListCard>

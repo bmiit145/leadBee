@@ -200,13 +200,20 @@ export interface Lead {
 
 export interface CallLog {
   _id: string;
-  leadId: string;
+  /** Populated on the call lists, an id on a lead's own call history. */
+  leadId: Lead | string;
   calledBy: User | string;
   calledByName: string;
   calledByRole: string;
+  /** `app` placed it, `device` read it from the phone, `manual` predates tracking. */
+  source?: 'app' | 'device' | 'manual';
+  direction?: 'outgoing' | 'incoming' | 'missed' | 'rejected';
+  phoneNumber?: string;
   calledAt: string;
+  /** Seconds for a measured call; minutes on old manual rows. */
   duration?: number;
-  outcome: CallOutcome;
+  /** A person's reading of the call — a measured call may have none. */
+  outcome?: CallOutcome;
   notes?: string;
   nextFollowUpAt?: string;
   createdAt: string;

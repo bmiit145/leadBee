@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!--
+    Declared here so the capability travels with the module that needs it.
+    Play allows this for a business CRM under the enterprise/CRM exception of
+    the SMS and Call Log policy; see docs/PRIVACY-CALL-DATA.md.
+  -->
+  <uses-permission android:name="android.permission.READ_CALL_LOG" />
+</manifest>

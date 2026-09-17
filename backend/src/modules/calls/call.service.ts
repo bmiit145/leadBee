@@ -29,6 +29,16 @@ export interface CallFilters {
   limit?: number;
 }
 
+export interface DeviceCallInput {
+  /** The phone's own id for this call log entry. */
+  deviceCallId: string;
+  leadId: string;
+  phoneNumber: string;
+  direction: CallDirection;
+  calledAt: Date;
+  durationSeconds?: number;
+}
+
 export interface RecordCallInput {
   leadId: string;
   /** Defaults to now: a call is recorded as it is placed. */
@@ -150,6 +160,70 @@ export const callService = {
     return call.populate(POPULATE as unknown as string[]);
   },
 
+  /**
+   * Calls the phone matched to a customer, in batches.
+   *
+   * The device has already thrown away everything that is not a customer's
+   * number (ADR-0005), so what arrives here is work. Each entry carries the
+   * phone's own id for the call, and `deviceCallId` is unique per member, so
+   * re-sending a window — a retry, a reinstall, an overlapping range — writes
+   * each call once.
+   */
+  async syncDevice(entries: DeviceCallInput[], viewer: Viewer) {
+    if (entries.length === 0) return { written: 0, skipped: 0 };
+
+    // One visibility check for the whole batch rather than per call.
+    const leadIds = [...new Set(entries.map((entry) => entry.leadId))].filter((id) =>
+      Types.ObjectId.isValid(id)
+    );
+    const visible = await Lead.find(
+      viewer.isOrganizer
+        ? { _id: { $in: leadIds } }
+        : { _id: { $in: leadIds }, $or: [{ assignedTo: viewer.userId }, { createdBy: viewer.userId }] }
+    )
+      .select('_id')
+      .lean();
+    const allowed = new Set(visible.map((lead) => lead._id.toString()));
+
+    const writable = entries.filter((entry) => allowed.has(entry.leadId));
+    if (writable.length === 0) return { written: 0, skipped: entries.length };
+
+    const result = await CallLog.bulkWrite(
+      writable.map((entry) => ({
+        updateOne: {
+          filter: { calledBy: viewer.userId, deviceCallId: entry.deviceCallId },
+          update: {
+            $setOnInsert: {
+              leadId: new Types.ObjectId(entry.leadId),
+              calledBy: viewer.userId,
+              calledByName: viewer.name,
+              calledByRole: viewer.role,
+              source: 'device',
+              direction: entry.direction,
+              deviceCallId: entry.deviceCallId,
+              phoneNumber: entry.phoneNumber,
+              calledAt: entry.calledAt,
+              duration: entry.durationSeconds,
+            },
+          },
+          upsert: true,
+        },
+      }))
+    );
+
+    // Denormalised call counts on each lead that gained a call.
+    await Promise.all(
+      [...new Set(writable.map((entry) => entry.leadId))].map((id) =>
+        refreshCallSummary(new Types.ObjectId(id))
+      )
+    );
+
+    return {
+      written: result.upsertedCount,
+      skipped: entries.length - result.upsertedCount,
+    };
+  },
+
   async list(filters: CallFilters, viewer: Viewer) {
     const query = await baseQuery(filters, viewer);
     const { page, limit, skip } = pageParams(filters);
@@ -201,6 +275,58 @@ export const callService = {
       },
       byDirection,
     };
+  },
+
+  /**
+   * Who is calling, and who is being called: the two questions "call activity"
+   * actually answers. Organizers get their team; everyone else gets themselves
+   * and their own customers, which is what `baseQuery` already limits them to.
+   */
+  async activity(filters: Omit<CallFilters, 'page' | 'limit'>, viewer: Viewer) {
+    const match = await baseQuery(filters, viewer);
+
+    const [byMember, byLead] = await Promise.all([
+      CallLog.aggregate<{ userId: string; name: string; calls: number; seconds: number }>([
+        { $match: match },
+        {
+          $group: {
+            _id: '$calledBy',
+            name: { $last: '$calledByName' },
+            calls: { $sum: 1 },
+            seconds: { $sum: { $ifNull: ['$duration', 0] } },
+          },
+        },
+        { $sort: { calls: -1 } },
+        { $limit: 50 },
+        { $project: { _id: 0, userId: { $toString: '$_id' }, name: 1, calls: 1, seconds: 1 } },
+      ]),
+      CallLog.aggregate<{ leadId: string; name: string; phone: string; calls: number; seconds: number }>([
+        { $match: match },
+        {
+          $group: {
+            _id: '$leadId',
+            calls: { $sum: 1 },
+            seconds: { $sum: { $ifNull: ['$duration', 0] } },
+          },
+        },
+        { $sort: { calls: -1 } },
+        { $limit: 20 },
+        { $lookup: { from: 'leads', localField: '_id', foreignField: '_id', as: 'lead' } },
+        { $unwind: { path: '$lead', preserveNullAndEmptyArrays: true } },
+        {
+          $project: {
+            _id: 0,
+            leadId: { $toString: '$_id' },
+            name: { $ifNull: ['$lead.contactName', 'Unknown'] },
+            phone: { $ifNull: ['$lead.contactPhone', ''] },
+            calls: 1,
+            seconds: 1,
+          },
+        },
+      ]),
+    ]);
+
+    return { byMember, byLead };
   },
 
   /**

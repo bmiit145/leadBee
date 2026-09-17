@@ -318,6 +318,21 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
   // Calls are not typed in by hand any more: they come from the phone's own
   // call log, matched to this lead's number (docs/adr/0005). Only reading the
   // history stays here; the device sync writes through its own module.
+  r.route({
+    method: 'GET',
+    url: '/phone-index',
+    preHandler: [app.requirePermission(PERMISSIONS.LEADS_VIEW, PERMISSIONS.LEADS_EDIT)],
+    schema: {
+      tags: ['leads'],
+      summary: 'Customer numbers the caller can see, as digits',
+      description:
+        'Downloaded by the phone so call-log matching happens on the device: a ' +
+        'call to anyone who is not a customer is discarded before it is sent.',
+      security,
+      response: { 200: okEnvelope, ...commonErrors },
+    },
+    handler: async (request) => ok(await leadService.phoneIndex(viewerOf(request))),
+  });
 
   // ─── Threads: Time Line / Notes / Ask Query ─────────────────────────────────
   r.route({
