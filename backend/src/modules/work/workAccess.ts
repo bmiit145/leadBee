@@ -40,7 +40,9 @@ export interface WorkItem {
   assignedTo?: unknown[] | null;
 }
 
-const isSelf = (value: unknown, actor: Actor) => idOf(value) === idOf(actor.userId);
+/** Whether a reference — populated or not — is the actor themselves. */
+export const isSelf = (value: unknown, actor: Actor): boolean =>
+  idOf(value) === idOf(actor.userId);
 
 export function canSeeLead(lead: OwnedLead, actor: Actor): boolean {
   return actor.isOrganizer || isSelf(lead.assignedTo, actor) || isSelf(lead.createdBy, actor);

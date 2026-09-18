@@ -634,7 +634,91 @@
       "task_assigned": "{{actor}} એ તમને કાર્ય \"{{subject}}\" સોંપ્યું",
       "meeting_assigned": "{{actor}} એ તમને {{subject}} સાથેની મીટિંગમાં ઉમેર્યા",
       "meeting_rescheduled": "{{actor}} એ {{subject}} સાથેની તમારી મીટિંગનો સમય બદલ્યો",
-      "meeting_cancelled": "{{actor}} એ {{subject}} સાથેની તમારી મીટિંગ રદ કરી"
+      "meeting_cancelled": "{{actor}} એ {{subject}} સાથેની તમારી મીટિંગ રદ કરી",
+      "lead_transfer_requested": "{{actor}} લીડ {{subject}} તમને ટ્રાન્સફર કરવા માંગે છે",
+      "lead_transfer_accepted": "{{actor}} એ {{subject}} નું ટ્રાન્સફર સ્વીકાર્યું",
+      "lead_transfer_declined": "{{actor}} એ {{subject}} નું ટ્રાન્સફર નકાર્યું",
+      "lead_transfer_cancelled": "{{actor}} એ {{subject}} નું ટ્રાન્સફર પાછું ખેંચ્યું"
+    }
+  },
+  "transfers": {
+    "title": "ટ્રાન્સફર વિનંતીઓ",
+    "action": "લીડ ટ્રાન્સફર કરો",
+    "tabs": {
+      "received": "મળેલી",
+      "sent": "મોકલેલી",
+      "all": "બધી"
+    },
+    "anyStatus": "કોઈપણ સ્થિતિ",
+    "status": {
+      "pending": "બાકી",
+      "accepted": "સ્વીકારેલી",
+      "declined": "નકારેલી",
+      "cancelled": "પાછી ખેંચેલી",
+      "expired": "સમય પૂરો"
+    },
+    "closeReason": {
+      "owner_changed": "બંધ — લીડ બીજાને સોંપાઈ",
+      "lead_removed": "બંધ — લીડ કાઢી નાખવામાં આવી",
+      "recipient_inactive": "બંધ — પ્રાપ્તકર્તાએ ટીમ છોડી"
+    },
+    "from": "તરફથી",
+    "to": "ને",
+    "reason": "કારણ",
+    "note": "નોંધ",
+    "requestedBy": "{{name}} દ્વારા વિનંતી",
+    "requestedOn": "વિનંતી {{date}}",
+    "expiresOn": "સમાપ્તિ {{date}}",
+    "decidedBy": "{{name}} દ્વારા {{status}} · {{date}}",
+    "accept": "સ્વીકારો",
+    "decline": "નકારો",
+    "withdraw": "પાછું ખેંચો",
+    "loadFailed": "ટ્રાન્સફર વિનંતીઓ લોડ થઈ શકી નહીં.",
+    "empty": {
+      "receivedTitle": "તમારા માટે કોઈ વિનંતી નથી",
+      "receivedMessage": "જ્યારે કોઈ સાથી તમને લીડ સોંપવા માંગે, ત્યારે તે અહીં દેખાશે.",
+      "sentTitle": "કોઈ વિનંતી મોકલી નથી",
+      "sentMessage": "લીડ ખોલો અને સાથીને સોંપવા માટે લીડ ટ્રાન્સફર કરો પસંદ કરો.",
+      "allTitle": "કોઈ ટ્રાન્સફર વિનંતી નથી",
+      "allMessage": "તમારી ટીમના ટ્રાન્સફર અહીં દેખાશે."
+    },
+    "sheet": {
+      "title": "લીડ ટ્રાન્સફર કરો",
+      "introOwner": "તમારા સાથી સ્વીકારે પછી લીડ ખસે છે. ત્યાં સુધી તમે વિનંતી પાછી ખેંચી શકો છો.",
+      "introOrganizer": "આયોજક તરીકે, લીડ તરત જ તમારા સાથીને જાય છે.",
+      "recipient": "કોને ટ્રાન્સફર કરવી",
+      "searchPlaceholder": "સાથીઓ શોધો",
+      "noRecipients": "કોઈ સાથી મળ્યા નહીં",
+      "reasonPlaceholder": "આ લીડ કેમ ખસે છે? દા.ત. ગ્રાહક તેમની સાઇટની નજીક છે",
+      "reasonHint": "ઓછામાં ઓછા 3 અક્ષર. તમારા સાથી આ જોશે.",
+      "submitOwner": "વિનંતી મોકલો",
+      "submitOrganizer": "હમણાં ટ્રાન્સફર કરો"
+    },
+    "sentToast": "{{name}} ને ટ્રાન્સફર વિનંતી મોકલી",
+    "doneToast": "લીડ {{name}} ને ટ્રાન્સફર થઈ",
+    "errors": {
+      "pending": "આ લીડ માટે એક ટ્રાન્સફર પહેલેથી જવાબની રાહ જુએ છે.",
+      "notPending": "આ વિનંતીનો જવાબ અપાઈ ગયો છે, પાછી ખેંચાઈ છે અથવા સમય પૂરો થયો છે.",
+      "stale": "દરમિયાન લીડ બીજા પાસે ગઈ, તેથી આ વિનંતી બંધ થઈ.",
+      "invalidRecipient": "આ લીડ પહેલેથી તેમની છે. બીજું કોઈ પસંદ કરો.",
+      "failed": "ટ્રાન્સફર પૂર્ણ થઈ શક્યું નહીં. ફરી પ્રયાસ કરો."
+    },
+    "banner": {
+      "pending": "{{name}} ટ્રાન્સફર સ્વીકારે તેની રાહ",
+      "expires": "સમાપ્તિ {{date}}"
+    },
+    "decide": {
+      "acceptTitle": "આ લીડ સ્વીકારવી છે?",
+      "acceptMessage": "{{contact}} ({{number}}) તમારી લીડ્સમાં આવશે.",
+      "declineTitle": "આ ટ્રાન્સફર નકારવું છે?",
+      "declineMessage": "લીડ {{name}} પાસે જ રહેશે.",
+      "withdrawTitle": "આ વિનંતી પાછી ખેંચવી છે?",
+      "withdrawMessage": "{{name}} હવે તેને સ્વીકારી શકશે નહીં.",
+      "notePlaceholder": "નોંધ ઉમેરો (વૈકલ્પિક)",
+      "back": "પાછા",
+      "acceptedToast": "લીડ સ્વીકારી — હવે તે તમારી લીડ્સમાં છે",
+      "declinedToast": "ટ્રાન્સફર નકાર્યું",
+      "withdrawnToast": "વિનંતી પાછી ખેંચી"
     }
   },
   "dropReasons": {

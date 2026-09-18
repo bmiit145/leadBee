@@ -49,6 +49,22 @@ const PUSH_COPY: Record<NotificationType, (actorName: string, subject: string) =
     title: 'Meeting cancelled',
     body: `${actorName} cancelled your meeting with ${subject}`,
   }),
+  lead_transfer_requested: (actorName, subject) => ({
+    title: 'Lead transfer request',
+    body: `${actorName} wants to transfer ${subject} to you`,
+  }),
+  lead_transfer_accepted: (actorName, subject) => ({
+    title: 'Lead transferred',
+    body: `${actorName} accepted the transfer of ${subject}`,
+  }),
+  lead_transfer_declined: (actorName, subject) => ({
+    title: 'Lead transfer declined',
+    body: `${actorName} declined the transfer of ${subject}`,
+  }),
+  lead_transfer_cancelled: (actorName, subject) => ({
+    title: 'Lead transfer withdrawn',
+    body: `${actorName} withdrew the transfer of ${subject}`,
+  }),
 };
 
 export const notificationService = {

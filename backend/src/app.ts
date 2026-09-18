@@ -25,6 +25,7 @@ import { leadRoutes } from './modules/leads/lead.routes.js';
 import { taskRoutes } from './modules/tasks/task.routes.js';
 import { meetingRoutes } from './modules/meetings/meeting.routes.js';
 import { callRoutes } from './modules/calls/call.routes.js';
+import { leadTransferRoutes } from './modules/leadTransfers/leadTransfer.routes.js';
 import { userRoutes } from './modules/users/user.routes.js';
 import { roleRoutes } from './modules/roles/role.routes.js';
 import { lookupRoutes } from './modules/lookups/lookup.routes.js';
@@ -78,6 +79,7 @@ export async function buildApp() {
   await app.register(taskRoutes, { prefix: `${API_PREFIX}/tasks` });
   await app.register(meetingRoutes, { prefix: `${API_PREFIX}/meetings` });
   await app.register(callRoutes, { prefix: `${API_PREFIX}/calls` });
+  await app.register(leadTransferRoutes, { prefix: `${API_PREFIX}/lead-transfers` });
   await app.register(userRoutes, { prefix: `${API_PREFIX}/users` });
   await app.register(roleRoutes, { prefix: `${API_PREFIX}/roles` });
   await app.register(lookupRoutes, { prefix: API_PREFIX });

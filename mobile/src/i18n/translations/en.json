@@ -634,7 +634,91 @@
       "task_assigned": "{{actor}} assigned you the task \"{{subject}}\"",
       "meeting_assigned": "{{actor}} added you to a meeting with {{subject}}",
       "meeting_rescheduled": "{{actor}} rescheduled your meeting with {{subject}}",
-      "meeting_cancelled": "{{actor}} cancelled your meeting with {{subject}}"
+      "meeting_cancelled": "{{actor}} cancelled your meeting with {{subject}}",
+      "lead_transfer_requested": "{{actor}} wants to transfer the lead {{subject}} to you",
+      "lead_transfer_accepted": "{{actor}} accepted the transfer of {{subject}}",
+      "lead_transfer_declined": "{{actor}} declined the transfer of {{subject}}",
+      "lead_transfer_cancelled": "{{actor}} withdrew the transfer of {{subject}}"
+    }
+  },
+  "transfers": {
+    "title": "Transfer Requests",
+    "action": "Transfer lead",
+    "tabs": {
+      "received": "Received",
+      "sent": "Sent",
+      "all": "All"
+    },
+    "anyStatus": "Any status",
+    "status": {
+      "pending": "Pending",
+      "accepted": "Accepted",
+      "declined": "Declined",
+      "cancelled": "Withdrawn",
+      "expired": "Expired"
+    },
+    "closeReason": {
+      "owner_changed": "Closed — the lead was reassigned",
+      "lead_removed": "Closed — the lead was deleted",
+      "recipient_inactive": "Closed — the recipient left the team"
+    },
+    "from": "From",
+    "to": "To",
+    "reason": "Reason",
+    "note": "Note",
+    "requestedBy": "Requested by {{name}}",
+    "requestedOn": "Requested {{date}}",
+    "expiresOn": "Expires {{date}}",
+    "decidedBy": "{{status}} by {{name}} · {{date}}",
+    "accept": "Accept",
+    "decline": "Decline",
+    "withdraw": "Withdraw",
+    "loadFailed": "Could not load transfer requests.",
+    "empty": {
+      "receivedTitle": "No requests for you",
+      "receivedMessage": "When a colleague wants to hand you a lead, it appears here.",
+      "sentTitle": "No requests sent",
+      "sentMessage": "Open a lead and choose Transfer lead to hand it to a colleague.",
+      "allTitle": "No transfer requests",
+      "allMessage": "Transfers across your team will appear here."
+    },
+    "sheet": {
+      "title": "Transfer lead",
+      "introOwner": "The lead moves once your colleague accepts. You can withdraw the request until then.",
+      "introOrganizer": "As an organizer, the lead moves to your colleague straight away.",
+      "recipient": "Transfer to",
+      "searchPlaceholder": "Search colleagues",
+      "noRecipients": "No colleagues found",
+      "reasonPlaceholder": "Why is this lead moving? e.g. Customer is closer to their site",
+      "reasonHint": "At least 3 characters. Your colleague sees this.",
+      "submitOwner": "Send request",
+      "submitOrganizer": "Transfer now"
+    },
+    "sentToast": "Transfer request sent to {{name}}",
+    "doneToast": "Lead transferred to {{name}}",
+    "errors": {
+      "pending": "This lead already has a transfer waiting for an answer.",
+      "notPending": "This request has already been answered, withdrawn or has expired.",
+      "stale": "The lead changed hands in the meantime, so this request was closed.",
+      "invalidRecipient": "This lead already belongs to them. Choose someone else.",
+      "failed": "Could not complete the transfer. Please try again."
+    },
+    "banner": {
+      "pending": "Waiting for {{name}} to accept the transfer",
+      "expires": "Expires {{date}}"
+    },
+    "decide": {
+      "acceptTitle": "Accept this lead?",
+      "acceptMessage": "{{contact}} ({{number}}) will move into your leads.",
+      "declineTitle": "Decline this transfer?",
+      "declineMessage": "The lead stays with {{name}}.",
+      "withdrawTitle": "Withdraw this request?",
+      "withdrawMessage": "{{name}} will no longer be able to accept it.",
+      "notePlaceholder": "Add a note (optional)",
+      "back": "Back",
+      "acceptedToast": "Lead accepted — it is now in your leads",
+      "declinedToast": "Transfer declined",
+      "withdrawnToast": "Request withdrawn"
     }
   },
   "dropReasons": {

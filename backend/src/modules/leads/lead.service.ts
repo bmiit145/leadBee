@@ -15,6 +15,7 @@ import { zoneOf } from '../../lib/viewer.js';
 import { notificationService } from '../notifications/notification.service.js';
 import { canSeeLead } from '../work/workAccess.js';
 import { leadThreadService } from './leadThread.service.js';
+import { closeOpenTransfers } from '../leadTransfers/leadTransfer.lifecycle.js';
 import {
   LEAD_STAGE_ORDER,
   TERMINAL_LEAD_STAGES,
@@ -477,6 +478,7 @@ export const leadService = {
         { leadId: lead._id, isActive: true },
         { $set: { isActive: false, archivedWithLead: true } }
       ),
+      closeOpenTransfers(lead._id, 'lead_removed'),
     ]);
 
     void Organization.updateOne(
@@ -766,6 +768,8 @@ async function announceReassignment(
   assignee: { _id: Types.ObjectId; name: string },
   viewer: Viewer
 ): Promise<void> {
+  // A reassignment overtakes any transfer the previous owner had asked for.
+  await closeOpenTransfers(lead._id, 'owner_changed');
   await notificationService.notify({
     type: 'lead_assigned',
     recipients: [assignee._id],

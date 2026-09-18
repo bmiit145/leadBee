@@ -26,6 +26,7 @@ const ENTITY_ICONS: Record<NotificationEntity, React.ComponentProps<typeof Ionic
   lead: 'person-add-outline',
   task: 'clipboard-outline',
   meeting: 'calendar-outline',
+  lead_transfer: 'swap-horizontal-outline',
 };
 
 /**

@@ -7,6 +7,7 @@ import { PurposeOfInquiry } from '../../models/PurposeOfInquiry.js';
 import { LeadDropReason } from '../../models/LeadDropReason.js';
 import { AppError } from '../../lib/errors.js';
 import { logger } from '../../lib/logger.js';
+import { supportsTransactions } from '../../lib/transactions.js';
 import { runInTenantScope, withoutTenantScope } from '../../lib/tenantContext.js';
 import {
   DEFAULT_ROLE_PERMISSIONS,
@@ -271,29 +272,6 @@ function ownerAccount(input: ProvisionInput, session?: ClientSession) {
     },
     { session, requirePasswordOfExisting: input.requireOwnerPassword }
   );
-}
-
-/**
- * Does this deployment support multi-document transactions?
- *
- * True only on a replica set or sharded cluster. Probed once and cached — the
- * answer cannot change without a reconnect, and asking on every signup would
- * add a round trip to the slowest endpoint in the product.
- */
-let transactionSupport: boolean | undefined;
-
-async function supportsTransactions(): Promise<boolean> {
-  if (transactionSupport !== undefined) return transactionSupport;
-  try {
-    const admin = mongoose.connection.db?.admin();
-    const info = await admin?.command({ hello: 1 });
-    // `setName` is present only on a replica set member; `msg: 'isdbgrid'`
-    // identifies a mongos in front of a sharded cluster.
-    transactionSupport = Boolean(info?.setName) || info?.msg === 'isdbgrid';
-  } catch {
-    transactionSupport = false;
-  }
-  return transactionSupport;
 }
 
 async function provisionTransactionally(

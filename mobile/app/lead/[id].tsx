@@ -25,6 +25,8 @@ import { QuickReplyPanel } from '../../src/components/QuickReplyPanel';
 import { LeadDocumentsPanel } from '../../src/components/LeadDocumentsPanel';
 import { LeadClientDetailsPanel } from '../../src/components/LeadClientDetailsPanel';
 import { LeadWorkPanel } from '../../src/components/LeadWorkPanel';
+import { TransferLeadSheet } from '../../src/components/transfers/TransferLeadSheet';
+import { PendingTransferBanner } from '../../src/components/transfers/PendingTransferBanner';
 import {
   ScreenHeader,
   UnderlineTabs,
@@ -88,7 +90,7 @@ export default function LeadDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { isOrganizer, hasPermission } = useAuth();
+  const { user, isOrganizer, hasPermission } = useAuth();
   const { t } = useTranslation();
   const qc = useQueryClient();
 
@@ -103,6 +105,7 @@ export default function LeadDetailScreen() {
     setDetailsOpen((open) => !open);
   };
   const [reminderStage, setReminderStage] = useState<LeadStage | null>(null);
+  const [transferOpen, setTransferOpen] = useState(false);
   const [dropReasonOpen, setDropReasonOpen] = useState(false);
   const [dropReason, setDropReason] = useState('');
   const [dropTag, setDropTag] = useState<string | null>(null);
@@ -122,6 +125,12 @@ export default function LeadDetailScreen() {
     queryFn: () => leadService.getById(id),
     enabled: !!id,
   });
+
+  const ownerId =
+    typeof lead?.assignedTo === 'object' ? lead.assignedTo?._id : lead?.assignedTo;
+  // Mirrors the API's rule — the owner or an organizer. The API enforces it;
+  // this only decides whether to offer the button (MOB-2).
+  const canTransfer = canEditLead && (isOrganizer || (!!user && ownerId === user._id));
 
   const invalidateLead = () => {
     qc.invalidateQueries({ queryKey: queryKeys.leads.detail(id) });
@@ -210,11 +219,18 @@ export default function LeadDetailScreen() {
       { icon: 'people-outline', accessibilityLabel: 'Schedule meeting', onPress: () => router.push(`/meeting/create?leadId=${id}`) },
       { icon: 'clipboard-outline', accessibilityLabel: 'Create task', onPress: () => router.push(`/task/create?leadId=${id}`) },
     ];
+    if (canTransfer) {
+      actions.push({
+        icon: 'swap-horizontal-outline',
+        accessibilityLabel: t('transfers.action'),
+        onPress: () => setTransferOpen(true),
+      });
+    }
     if (canEditLead) {
       actions.push({ icon: 'create-outline', accessibilityLabel: 'Edit lead', onPress: () => router.push(`/lead/add?edit=${id}`) });
     }
     return actions;
-  }, [id, canEditLead, router, lead]);
+  }, [id, canEditLead, canTransfer, router, lead, t]);
 
   if (isLoading) {
     return (
@@ -344,6 +360,10 @@ export default function LeadDetailScreen() {
         </View>
       )}
 
+      {canTransfer && user ? (
+        <PendingTransferBanner leadId={id} viewerId={user._id} isOrganizer={isOrganizer} />
+      ) : null}
+
       <View
         style={styles.tabContent}
         onTouchStart={(event) => {
@@ -382,6 +402,16 @@ export default function LeadDetailScreen() {
           </ScrollView>
         )}
       </View>
+
+      {canTransfer ? (
+        <TransferLeadSheet
+          visible={transferOpen}
+          onDismiss={() => setTransferOpen(false)}
+          leadId={id}
+          ownerId={ownerId}
+          isOrganizer={isOrganizer}
+        />
+      ) : null}
 
       <SetReminderDialog
         visible={reminderStage !== null}

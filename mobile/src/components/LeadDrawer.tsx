@@ -20,8 +20,14 @@ import { useAuth } from '../stores/auth.store';
 import { useOrganizationSwitcher } from './organizations/OrganizationSwitcher';
 import { Avatar } from './ui';
 import { toTitleCase } from '../utils/format';
+import { useQuery } from '@tanstack/react-query';
+import { queryKeys } from '../lib/queryKeys';
+import { leadTransferService } from '../services/leadTransfer.service';
 
 const DRAWER_WIDTH = Dimensions.get('window').width * 0.78;
+
+const waitingIn = (items: { badge?: number }[]): number =>
+  items.reduce((sum, item) => sum + (item.badge ?? 0), 0);
 
 /**
  * Read from the manifest rather than typed in: a hard-coded version goes stale
@@ -39,7 +45,13 @@ type IconName = keyof typeof Ionicons.glyphMap;
 
 /** One row of the menu, in the order it is drawn. */
 type MenuEntry =
-  | { kind: 'group'; label: string; icon: IconName; items: { label: string; onPress: () => void }[] }
+  | {
+      kind: 'group';
+      label: string;
+      icon: IconName;
+      /** `badge` counts what is waiting on the viewer behind that item. */
+      items: { label: string; onPress: () => void; badge?: number }[];
+    }
   | { kind: 'link'; label: string; icon: IconName; onPress: () => void; tone?: 'danger' }
   | { kind: 'soon'; label: string; icon: IconName }
   | { kind: 'divider'; key: string };
@@ -53,8 +65,16 @@ export function LeadDrawer({ visible, onClose }: Props) {
   const router = useRouter();
   const { t } = useTranslation();
   const translateX = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
-  const { user, organization, logout } = useAuth();
+  const { user, organization, logout, hasPermission } = useAuth();
   const { openSwitcher } = useOrganizationSwitcher();
+
+  // Read each time the menu opens, so the count is current without polling.
+  const canTransfer = hasPermission('leads.edit');
+  const transfersWaiting = useQuery({
+    queryKey: queryKeys.transfers.pendingCount,
+    queryFn: leadTransferService.pendingCount,
+    enabled: visible && canTransfer,
+  });
 
   /**
    * The one section currently unfolded, or `null` for none — which is how the
@@ -117,6 +137,15 @@ export function LeadDrawer({ visible, onClose }: Props) {
       items: [
         { label: 'Create New Lead', onPress: () => nav('/lead/add') },
         { label: 'All Leads', onPress: () => nav('/lead/list') },
+        ...(canTransfer
+          ? [
+              {
+                label: t('transfers.title'),
+                onPress: () => nav('/lead/transfers'),
+                badge: transfersWaiting.data,
+              },
+            ]
+          : []),
       ],
     },
     {
@@ -248,6 +277,12 @@ export function LeadDrawer({ visible, onClose }: Props) {
                     <Ionicons name={entry.icon} size={20} color={colors.primary} />
                   </View>
                   <Text style={styles.sectionLabel}>{entry.label}</Text>
+                  {/* Folded, the group carries its items' waiting count, so it is not hidden. */}
+                  {!isOpen && waitingIn(entry.items) > 0 ? (
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>{waitingIn(entry.items)}</Text>
+                    </View>
+                  ) : null}
                   {/* ">" marks a row that holds a sub-menu; it turns down once unfolded.
                       Rows that go straight to a screen carry no chevron. */}
                   <Ionicons
@@ -266,6 +301,11 @@ export function LeadDrawer({ visible, onClose }: Props) {
                     >
                       <Ionicons name="chevron-forward-outline" size={14} color={colors.primary} style={{ marginLeft: 4 }} />
                       <Text style={styles.subLabel}>{item.label}</Text>
+                      {item.badge ? (
+                        <View style={styles.badge}>
+                          <Text style={styles.badgeText}>{item.badge > 99 ? '99+' : item.badge}</Text>
+                        </View>
+                      ) : null}
                     </TouchableOpacity>
                   ))}
               </View>
@@ -335,7 +375,17 @@ const styles = StyleSheet.create({
     gap: 10,
     backgroundColor: '#F8F9FF',
   },
-  subLabel: { fontSize: 14, fontWeight: '600', color: colors.primary },
+  subLabel: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.primary },
+  badge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    backgroundColor: colors.error,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badgeText: { fontSize: 11, fontWeight: '800', color: '#FFFFFF' },
   soonBadge: { backgroundColor: '#FEE2E2', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   soonText: { fontSize: 9, fontWeight: '800', color: '#EF4444' },
   footer: { borderTopWidth: 1, borderTopColor: '#F0F0F0', paddingVertical: 16, alignItems: 'center' },

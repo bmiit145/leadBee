@@ -38,7 +38,7 @@ const OBJECT_ID = /^[a-f\d]{24}$/i;
 
 /** A push's payload arrives from outside the app, so it is parsed, not trusted. */
 const pushPayload = z.object({
-  entityType: z.enum(['lead', 'task', 'meeting']),
+  entityType: z.enum(['lead', 'task', 'meeting', 'lead_transfer']),
   entityId: z.string().regex(OBJECT_ID),
   // Optional and forgiving: a malformed id costs only the read receipt, never the tap.
   notificationId: z.string().regex(OBJECT_ID).optional().catch(undefined),

@@ -22,6 +22,17 @@ export const queryKeys = {
     statusCounts: ['tasks-status-counts'] as const,
     detail: (id: string) => ['task', id] as const,
   },
+  /**
+   * Transfer requests. Under `leads` so the existing lead invalidation after
+   * any lead change also refreshes them — a reassignment closes open requests.
+   */
+  transfers: {
+    all: ['leads', 'transfers'] as const,
+    list: (box: string, status: string) => ['leads', 'transfers', 'list', box, status] as const,
+    pendingCount: ['leads', 'transfers', 'pending-count'] as const,
+    forLead: (leadId: string) => ['leads', 'transfers', 'lead', leadId] as const,
+    recipients: (search: string) => ['transfer-recipients', search] as const,
+  },
   /** Every call list, counter and trend — one target to refresh after a sync. */
   calls: {
     all: ['calls'] as const,

@@ -298,8 +298,53 @@ export type NotificationType =
   | 'task_assigned'
   | 'meeting_assigned'
   | 'meeting_rescheduled'
-  | 'meeting_cancelled';
-export type NotificationEntity = 'lead' | 'task' | 'meeting';
+  | 'meeting_cancelled'
+  | 'lead_transfer_requested'
+  | 'lead_transfer_accepted'
+  | 'lead_transfer_declined'
+  | 'lead_transfer_cancelled';
+export type NotificationEntity = 'lead' | 'task' | 'meeting' | 'lead_transfer';
+
+// ─── Lead transfer ──────────────────────────────────────────────────────────
+
+/** `pending` already accounts for expiry: the API reports a lapsed request as `expired`. */
+export type LeadTransferStatus = 'pending' | 'accepted' | 'declined' | 'cancelled' | 'expired';
+
+/** Why LeadBee closed a request nobody decided. */
+export type LeadTransferCloseReason = 'owner_changed' | 'lead_removed' | 'recipient_inactive';
+
+export type LeadTransferBox = 'received' | 'sent' | 'all';
+
+/** A request to hand a lead to a colleague. Names are as they were when it was made. */
+export interface LeadTransfer {
+  _id: string;
+  lead: string;
+  leadNumber: string;
+  contactName: string;
+  fromUser: string;
+  fromUserName: string;
+  toUser: string;
+  toUserName: string;
+  requestedBy: string;
+  requestedByName: string;
+  reason: string;
+  status: LeadTransferStatus;
+  decidedBy?: string;
+  decidedByName?: string;
+  decidedAt?: string;
+  decisionNote?: string;
+  closeReason?: LeadTransferCloseReason;
+  expiresAt: string;
+  createdAt: string;
+}
+
+/** A colleague a lead can be handed to — all the API reveals about them. */
+export interface TransferRecipient {
+  _id: string;
+  name: string;
+  role: string;
+  avatarUrl?: string;
+}
 
 /** An inbox entry. Carries the event, not a sentence — the app translates it. */
 export interface AppNotification {

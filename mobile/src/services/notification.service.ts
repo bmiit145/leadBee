@@ -32,5 +32,9 @@ export function notificationHref(entityType: NotificationEntity, entityId: strin
       return `/task/${entityId}`;
     case 'meeting':
       return `/meeting/${entityId}`;
+    // The request screen, not the lead: before acceptance the recipient cannot
+    // open the lead, and afterwards the sender may not be able to either.
+    case 'lead_transfer':
+      return '/lead/transfers';
   }
 }

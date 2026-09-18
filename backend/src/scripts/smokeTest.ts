@@ -14,6 +14,7 @@ import { Task } from '../models/Task.js';
 import { Meeting } from '../models/Meeting.js';
 import { CallLog } from '../models/CallLog.js';
 import { LeadThreadItem } from '../models/LeadThreadItem.js';
+import { LeadTransfer } from '../models/LeadTransfer.js';
 import { LEAD_STAGE_ORDER } from '../config/constants.js';
 import { withoutTenantScope } from '../lib/tenantContext.js';
 import { isValidMobilePhone } from '../lib/phone.js';
@@ -1050,6 +1051,227 @@ async function main(): Promise<void> {
     purposeLeadAfter.json()?.data?.interestedIn
   );
 
+  // ─── Lead transfer ──────────────────────────────────────────────────────────
+  section('Lead transfer');
+  const managerLogin = await app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/login',
+    payload: { phone: '9000000002', password: 'Password@123' },
+  });
+  const managerAuth = { authorization: `Bearer ${managerLogin.json()?.data?.accessToken}` };
+  const managerId = managerLogin.json()?.data?.user?._id as string;
+  check('Manager can sign in', managerLogin.statusCode === 200 && Boolean(managerId), managerLogin.statusCode);
+
+  const transferIds: string[] = [];
+  const transferLead = await inject('POST', '/api/v1/leads', agentAuth, {
+    contactName: 'Smoke Transfer',
+    contactPhone: workPhone(4),
+  });
+  const transferLeadId = transferLead.json()?.data?._id as string;
+  workLeadIds.push(transferLeadId);
+  const ownerOfTransferLead = async () =>
+    (await inject('GET', `/api/v1/leads/${transferLeadId}`, ownerAuth)).json()?.data?.assignedTo?._id;
+
+  const recipients = await inject('GET', '/api/v1/lead-transfers/recipients?limit=100', agentAuth);
+  const recipientRows = (recipients.json()?.data ?? []) as Array<Record<string, unknown>>;
+  check(
+    'An agent can list colleagues to transfer to — name and role only',
+    recipients.statusCode === 200 &&
+      recipientRows.some((row) => row._id === managerId) &&
+      !recipientRows.some((row) => row._id === agentId) &&
+      recipientRows.every(
+        (row) => !('organizationId' in row) && !('phone' in row) && !('email' in row)
+      ),
+    recipientRows
+  );
+
+  const noReason = await inject('POST', '/api/v1/lead-transfers', agentAuth, {
+    leadId: transferLeadId,
+    toUserId: managerId,
+    reason: ' ',
+  });
+  check('A transfer needs a reason', noReason.statusCode === 422, noReason.statusCode);
+
+  const toCurrentOwner = await inject('POST', '/api/v1/lead-transfers', agentAuth, {
+    leadId: transferLeadId,
+    toUserId: agentId,
+    reason: 'Smoke: to myself',
+  });
+  check(
+    'A lead cannot be transferred to its current owner',
+    toCurrentOwner.statusCode === 422 &&
+      toCurrentOwner.json()?.error?.code === 'TRANSFER_INVALID_RECIPIENT',
+    toCurrentOwner.json()
+  );
+
+  const notTheirs = await inject('POST', '/api/v1/lead-transfers', agentAuth, {
+    leadId: stagedLeadId,
+    toUserId: managerId,
+    reason: 'Smoke: not mine',
+  });
+  check(
+    'An agent cannot transfer a lead that is not theirs',
+    notTheirs.statusCode === 403 || notTheirs.statusCode === 404,
+    notTheirs.statusCode
+  );
+
+  const requested = await inject('POST', '/api/v1/lead-transfers', agentAuth, {
+    leadId: transferLeadId,
+    toUserId: managerId,
+    reason: 'Smoke: moving to the site team',
+  });
+  const transferId = requested.json()?.data?.transfer?._id as string;
+  transferIds.push(transferId);
+  check(
+    'An owner’s transfer waits for the recipient',
+    requested.statusCode === 201 &&
+      requested.json()?.data?.completed === false &&
+      requested.json()?.data?.transfer?.status === 'pending' &&
+      (await ownerOfTransferLead()) === agentId,
+    requested.json()
+  );
+
+  const secondRequest = await inject('POST', '/api/v1/lead-transfers', agentAuth, {
+    leadId: transferLeadId,
+    toUserId: ownerId,
+    reason: 'Smoke: a second ask',
+  });
+  check(
+    'A lead has only one open transfer at a time',
+    secondRequest.statusCode === 409 &&
+      secondRequest.json()?.error?.code === 'TRANSFER_PENDING' &&
+      secondRequest.json()?.error?.details?.transferId === transferId,
+    secondRequest.json()
+  );
+
+  const inbox = await inject('GET', '/api/v1/lead-transfers?box=received&status=pending', managerAuth);
+  const waiting = await inject('GET', '/api/v1/lead-transfers/pending-count', managerAuth);
+  const sent = await inject('GET', '/api/v1/lead-transfers?box=sent', agentAuth);
+  check(
+    'The request is in the recipient’s inbox, their badge, and the sender’s sent list',
+    (inbox.json()?.data ?? []).some((row: { _id: string }) => row._id === transferId) &&
+      (waiting.json()?.data?.count ?? 0) >= 1 &&
+      (sent.json()?.data ?? []).some((row: { _id: string }) => row._id === transferId),
+    [inbox.json()?.total, waiting.json()?.data, sent.json()?.total]
+  );
+
+  const agentOverview = await inject('GET', '/api/v1/lead-transfers?box=all', agentAuth);
+  check('Only organizers see every transfer', agentOverview.statusCode === 403, agentOverview.statusCode);
+
+  const senderAccepts = await inject('POST', `/api/v1/lead-transfers/${transferId}/accept`, agentAuth, {});
+  check(
+    'The sender cannot accept on the recipient’s behalf',
+    senderAccepts.statusCode === 403 && (await ownerOfTransferLead()) === agentId,
+    senderAccepts.statusCode
+  );
+
+  const accepted = await inject('POST', `/api/v1/lead-transfers/${transferId}/accept`, managerAuth, {
+    note: 'Smoke: taking it',
+  });
+  check(
+    'Accepting moves the lead to the recipient',
+    accepted.statusCode === 200 &&
+      accepted.json()?.data?.status === 'accepted' &&
+      (await ownerOfTransferLead()) === managerId,
+    accepted.json()
+  );
+
+  const transferTimeline = await inject(
+    'GET',
+    `/api/v1/leads/${transferLeadId}/thread?channel=timeline`,
+    ownerAuth
+  );
+  check(
+    'The lead’s timeline records the request and the transfer',
+    ['lead_transfer_requested', 'lead_transferred'].every((event) =>
+      (transferTimeline.json()?.data ?? []).some((item: { event?: string }) => item.event === event)
+    ),
+    (transferTimeline.json()?.data ?? []).map((item: { event?: string }) => item.event)
+  );
+
+  const acceptedTwice = await inject('POST', `/api/v1/lead-transfers/${transferId}/accept`, managerAuth, {});
+  check(
+    'A decided request cannot be decided again',
+    acceptedTwice.statusCode === 409 &&
+      acceptedTwice.json()?.error?.code === 'TRANSFER_NOT_PENDING' &&
+      acceptedTwice.json()?.error?.details?.status === 'accepted',
+    acceptedTwice.json()
+  );
+
+  const direct = await inject('POST', '/api/v1/lead-transfers', ownerAuth, {
+    leadId: transferLeadId,
+    toUserId: agentId,
+    reason: 'Smoke: back to the field',
+  });
+  transferIds.push(direct.json()?.data?.transfer?._id);
+  check(
+    'An organizer’s transfer takes effect at once',
+    direct.statusCode === 201 &&
+      direct.json()?.data?.completed === true &&
+      direct.json()?.data?.transfer?.status === 'accepted' &&
+      (await ownerOfTransferLead()) === agentId,
+    direct.json()
+  );
+
+  const toDecline = await inject('POST', '/api/v1/lead-transfers', agentAuth, {
+    leadId: transferLeadId,
+    toUserId: managerId,
+    reason: 'Smoke: will be declined',
+  });
+  transferIds.push(toDecline.json()?.data?.transfer?._id);
+  const declined = await inject(
+    'POST',
+    `/api/v1/lead-transfers/${toDecline.json()?.data?.transfer?._id}/decline`,
+    managerAuth,
+    { note: 'Smoke: not my area' }
+  );
+  check(
+    'Declining leaves the lead where it was',
+    declined.statusCode === 200 &&
+      declined.json()?.data?.status === 'declined' &&
+      (await ownerOfTransferLead()) === agentId,
+    declined.json()
+  );
+
+  const toWithdraw = await inject('POST', '/api/v1/lead-transfers', agentAuth, {
+    leadId: transferLeadId,
+    toUserId: managerId,
+    reason: 'Smoke: will be withdrawn',
+  });
+  const withdrawId = toWithdraw.json()?.data?.transfer?._id as string;
+  transferIds.push(withdrawId);
+  // The seeded manager is an organizer, who may withdraw anything, so the
+  // recipient-cannot-withdraw rule is covered by the policy tests instead.
+  const senderWithdraws = await inject('POST', `/api/v1/lead-transfers/${withdrawId}/cancel`, agentAuth, {});
+  check(
+    'The sender can withdraw a request',
+    senderWithdraws.statusCode === 200 && senderWithdraws.json()?.data?.status === 'cancelled',
+    senderWithdraws.json()
+  );
+
+  const overtaken = await inject('POST', '/api/v1/lead-transfers', agentAuth, {
+    leadId: transferLeadId,
+    toUserId: managerId,
+    reason: 'Smoke: will be overtaken',
+  });
+  const overtakenId = overtaken.json()?.data?.transfer?._id as string;
+  transferIds.push(overtakenId);
+  await inject('PUT', `/api/v1/leads/${transferLeadId}/assign`, ownerAuth, { assignedTo: ownerId });
+  const acceptOvertaken = await inject('POST', `/api/v1/lead-transfers/${overtakenId}/accept`, managerAuth, {});
+  const transferHistory = await inject('GET', `/api/v1/lead-transfers/lead/${transferLeadId}`, ownerAuth);
+  const overtakenRow = (transferHistory.json()?.data?.history ?? []).find(
+    (row: { _id: string }) => row._id === overtakenId
+  );
+  check(
+    'Reassigning a lead closes its open transfer, and it can no longer be accepted',
+    acceptOvertaken.statusCode === 409 &&
+      overtakenRow?.status === 'cancelled' &&
+      overtakenRow?.closeReason === 'owner_changed' &&
+      transferHistory.json()?.data?.open === null &&
+      (await ownerOfTransferLead()) === ownerId,
+    [acceptOvertaken.json(), overtakenRow]
+  );
+
   // ─── CROSS-TENANT ISOLATION ─────────────────────────────────────────────────
   section('Cross-tenant isolation (the one that matters)');
 
@@ -1117,6 +1339,33 @@ async function main(): Promise<void> {
     'Tenant B cannot DELETE tenant A’s lead by id',
     crossDelete.statusCode === 404 || crossDelete.statusCode === 403,
     crossDelete.statusCode
+  );
+
+  // Transfers: tenant B holds tenant A's exact transfer, lead and user ids.
+  const crossTransferHistory = await inject('GET', `/api/v1/lead-transfers/lead/${transferLeadId}`, tenantBAuth);
+  const crossTransferDecide = await inject('POST', `/api/v1/lead-transfers/${transferId}/cancel`, tenantBAuth, {});
+  const crossTransferCreate = await inject('POST', '/api/v1/lead-transfers', tenantBAuth, {
+    leadId: transferLeadId,
+    toUserId: agentId,
+    reason: 'Smoke: hijack',
+  });
+  const crossOverview = await inject('GET', '/api/v1/lead-transfers?box=all', tenantBAuth);
+  const crossRecipients = await inject('GET', '/api/v1/lead-transfers/recipients?limit=100', tenantBAuth);
+  check(
+    'Tenant B cannot read, decide or create tenant A’s transfers, nor see its people',
+    crossTransferHistory.statusCode === 404 &&
+      crossTransferDecide.statusCode === 404 &&
+      crossTransferCreate.statusCode === 404 &&
+      crossOverview.json()?.total === 0 &&
+      !(crossRecipients.json()?.data ?? []).some(
+        (row: { _id: string }) => row._id === agentId || row._id === managerId
+      ),
+    [
+      crossTransferHistory.statusCode,
+      crossTransferDecide.statusCode,
+      crossTransferCreate.statusCode,
+      crossOverview.json()?.total,
+    ]
   );
 
   const crossThread = await app.inject({
@@ -2238,6 +2487,10 @@ async function main(): Promise<void> {
     await Meeting.deleteMany({ leadId: { $in: smokeLeadIds } });
     await CallLog.deleteMany({ leadId: { $in: smokeLeadIds } });
     await LeadThreadItem.deleteMany({ lead: { $in: smokeLeadIds } });
+    await LeadTransfer.deleteMany({ lead: { $in: smokeLeadIds } });
+    await Notification.deleteMany({
+      entityId: { $in: [...transferIds.filter(Boolean), ...smokeLeadIds] },
+    });
     await Lead.deleteMany({ _id: { $in: smokeLeadIds } });
     await Notification.deleteMany({ entityId: leadId });
     await LeadDropReason.deleteOne({ _id: dropReasonId });

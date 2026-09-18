@@ -29,6 +29,12 @@ export { Lead, type ILead } from './Lead.js';
 export { CallLog, type ICallLog } from './CallLog.js';
 export { LeadThreadItem, LEAD_THREAD_CHANNELS, type ILeadThreadItem, type LeadThreadChannel } from './LeadThreadItem.js';
 export { LeadDocument, type ILeadDocument, type LeadDocumentKind } from './LeadDocument.js';
+export {
+  LeadTransfer,
+  LEAD_TRANSFER_STATUS_ORDER,
+  type ILeadTransfer,
+  type LeadTransferStatus,
+} from './LeadTransfer.js';
 export { Task, TASK_STATUSES, TASK_STATUS_ORDER, type ITask, type TaskStatus, type TaskOrigin } from './Task.js';
 export {
   Meeting,

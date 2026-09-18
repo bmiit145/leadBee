@@ -15,6 +15,12 @@ export const NOTIFICATION_TYPES = {
   meeting_assigned: 'meeting',
   meeting_rescheduled: 'meeting',
   meeting_cancelled: 'meeting',
+  // Point at the request, not the lead: until a transfer is accepted the
+  // recipient cannot open the lead, and afterwards the sender may not either.
+  lead_transfer_requested: 'lead_transfer',
+  lead_transfer_accepted: 'lead_transfer',
+  lead_transfer_declined: 'lead_transfer',
+  lead_transfer_cancelled: 'lead_transfer',
 } as const;
 
 export type NotificationType = keyof typeof NOTIFICATION_TYPES;
