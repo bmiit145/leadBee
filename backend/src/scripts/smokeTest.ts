@@ -540,6 +540,36 @@ async function main(): Promise<void> {
   workLeadIds.push(duplicateAllowed.json()?.data?._id);
   check('A flagged duplicate can still be created on purpose', duplicateAllowed.statusCode === 201, duplicateAllowed.statusCode);
 
+  // Two leads now hold that number. Every match is reported, and each one is
+  // described only as far as the asker may see it.
+  const ownerDuplicates = await inject('GET', `/api/v1/leads/duplicates?phone=${workPhone(1)}`, ownerAuth);
+  const agentDuplicates = await inject('GET', `/api/v1/leads/duplicates?phone=${workPhone(1)}`, agentAuth);
+  const agentMatches = (agentDuplicates.json()?.data?.matches ?? []) as Array<Record<string, unknown>>;
+  check(
+    'Every duplicate is listed; a match the asker cannot open hides its customer',
+    ownerDuplicates.json()?.data?.total === 2 &&
+      (ownerDuplicates.json()?.data?.matches ?? []).every(
+        (m: { canView: boolean; contactName?: string }) => m.canView && Boolean(m.contactName)
+      ) &&
+      agentDuplicates.json()?.data?.total === 2 &&
+      agentMatches.every(
+        (m) => m.canView === false && !('contactName' in m) && !('leadId' in m) && Boolean(m.leadNumber)
+      ),
+    [ownerDuplicates.json()?.data, agentMatches]
+  );
+
+  const thirdCopy = await inject('POST', '/api/v1/leads', ownerAuth, {
+    contactName: 'Smoke Duplicate',
+    contactPhone: workPhone(1),
+  });
+  check(
+    'Saving a duplicate reports all the leads it matches',
+    thirdCopy.statusCode === 409 &&
+      thirdCopy.json()?.error?.details?.total === 2 &&
+      (thirdCopy.json()?.error?.details?.matches ?? []).length === 2,
+    thirdCopy.json()?.error?.details
+  );
+
   const edited = await inject('PUT', `/api/v1/leads/${stagedLeadId}`, ownerAuth, {
     contactName: 'Smoke Qualified Edited',
   });

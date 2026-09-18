@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { leadService } from './lead.service.js';
+import { Types } from 'mongoose';
+import { findDuplicates, leadService } from './lead.service.js';
 import { leadThreadService } from './leadThread.service.js';
 import {
   assignLeadBody,
@@ -318,6 +319,38 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
   // Calls are not typed in by hand any more: they come from the phone's own
   // call log, matched to this lead's number (docs/adr/0005). Only reading the
   // history stays here; the device sync writes through its own module.
+  r.route({
+    method: 'GET',
+    url: '/duplicates',
+    preHandler: [app.requirePermission(PERMISSIONS.LEADS_VIEW, PERMISSIONS.LEADS_EDIT)],
+    schema: {
+      tags: ['leads'],
+      summary: 'Live leads already holding a number — checked as the number is typed',
+      description:
+        'Each match is described as far as the caller may see it: number, stage, ' +
+        'date and owner always; the customer name and id only when the caller ' +
+        'could open that lead.',
+      security,
+      querystring: z.object({
+        phone: z.string().trim().max(20).optional(),
+        secondPhone: z.string().trim().max(20).optional(),
+        /** The lead being edited, which is not its own duplicate. */
+        excludeId: objectIdSchema.optional(),
+      }),
+      response: { 200: okEnvelope, ...commonErrors },
+    },
+    handler: async (request) => {
+      const { phone, secondPhone, excludeId } = request.query;
+      return ok(
+        await findDuplicates(
+          [phone ?? '', secondPhone ?? ''],
+          viewerOf(request),
+          excludeId ? new Types.ObjectId(excludeId) : undefined
+        )
+      );
+    },
+  });
+
   r.route({
     method: 'GET',
     url: '/phone-index',

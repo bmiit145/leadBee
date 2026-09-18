@@ -30,6 +30,9 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { userService } from '../../src/services/user.service';
 import { queryKeys } from '../../src/lib/queryKeys';
+import { DuplicateLeadDialog } from '../../src/components/DuplicateLeadDialog';
+import type { DuplicateLeadDetails, DuplicateResult } from '../../src/services/lead.service';
+import { useDebouncedValue } from '../../src/hooks/useDebouncedValue';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -72,17 +75,20 @@ function FieldRow({
   icon,
   label,
   required,
+  error,
   children,
 }: {
   icon: string;
   label: string;
   required?: boolean;
+  /** Draws the row in the error colour — the number already belongs to a lead. */
+  error?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <View style={sStyles.fieldRow}>
-      <View style={sStyles.fieldIcon}>
-        <Ionicons name={icon as any} size={18} color={colors.primary} />
+    <View style={[sStyles.fieldRow, error && sStyles.fieldRowError]}>
+      <View style={[sStyles.fieldIcon, error && sStyles.fieldIconError]}>
+        <Ionicons name={icon as any} size={18} color={error ? colors.error : colors.primary} />
       </View>
       <View style={sStyles.fieldBody}>
         <Text style={sStyles.fieldLabel}>
@@ -159,6 +165,8 @@ const sStyles = StyleSheet.create({
     borderBottomColor: colors.borderLight,
     gap: 12,
   },
+  fieldRowError: { borderBottomColor: colors.error, borderBottomWidth: 1.5 },
+  fieldIconError: { backgroundColor: `${colors.error}14` },
   fieldIcon: {
     width: 32,
     height: 32,
@@ -579,6 +587,31 @@ export default function AddLeadScreen() {
   const [form, setForm]             = useState<FormData>(DEFAULT_FORM);
   const [submitting, setSubmitting] = useState(false);
 
+  // Duplicates are checked while the number is typed, so the person learns
+  // before filling in the rest — and again on save, which is the rule.
+  const [duplicates, setDuplicates] = useState<DuplicateResult | null>(null);
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
+  // Which save button the override continues: "Save" or "Save & create new".
+  const [pendingCreateNew, setPendingCreateNew] = useState(false);
+  // `live` opened while typing — the form is not finished, so the override
+  // means "carry on"; `save` opened by saving — the override saves.
+  const [duplicateMode, setDuplicateMode] = useState<'live' | 'save'>('live');
+  // A number the person has already chosen to keep, so saving does not ask again.
+  const [acknowledgedPhone, setAcknowledgedPhone] = useState<string | null>(null);
+
+  const typedPhone = useDebouncedValue(form.contactPhone.trim(), 450);
+  const liveDuplicates = useQuery({
+    queryKey: ['lead-duplicates', typedPhone, edit ?? ''],
+    queryFn: () => leadService.findDuplicates(typedPhone, undefined, edit),
+    // A partial number matches nothing worth warning about.
+    enabled: isValidPhone(typedPhone),
+    // Never an old answer: another lead with this number may have been saved
+    // a minute ago, by this person or anyone else.
+    staleTime: 0,
+  });
+  const liveMatch = isValidPhone(typedPhone) ? liveDuplicates.data : undefined;
+  const [announcedFor, setAnnouncedFor] = useState<string | null>(null);
+
   // Editing loads the lead into this same form. Without it, "Edit lead" opened a
   // blank create form and saving made a second lead.
   const editQuery = useQuery({
@@ -587,6 +620,20 @@ export default function AddLeadScreen() {
     enabled: !!edit,
   });
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
+
+  // Like the reference app: the moment a complete number turns out to be
+  // taken, the details open by themselves — once per number, so closing the
+  // dialog is respected. Editing a lead does not raise it for the number the
+  // lead already had.
+  useEffect(() => {
+    if (!liveMatch || liveMatch.total === 0) return;
+    if (announcedFor === typedPhone) return;
+    if (edit && editQuery.data?.contactPhone === typedPhone) return;
+    setAnnouncedFor(typedPhone);
+    setDuplicates(liveMatch);
+    setDuplicateMode('live');
+    setDuplicateOpen(true);
+  }, [liveMatch, typedPhone, announcedFor, edit, editQuery.data?.contactPhone]);
 
   React.useEffect(() => {
     const lead = editQuery.data;
@@ -665,6 +712,8 @@ export default function AddLeadScreen() {
   const refreshLeadQueries = () => {
     void queryClient.invalidateQueries({ queryKey: ['leads'] });
     void queryClient.invalidateQueries({ queryKey: ['leads-stats'] });
+    // The lead just saved is now a duplicate of its own number.
+    void queryClient.invalidateQueries({ queryKey: ['lead-duplicates'] });
     if (edit) void queryClient.invalidateQueries({ queryKey: ['lead', edit] });
   };
 
@@ -701,7 +750,8 @@ export default function AddLeadScreen() {
       budgetMax:          estimate,
       nextFollowUpAt:     form.nextFollowUpAt ? form.nextFollowUpAt.toISOString() : undefined,
       notes:              form.notes.trim() || undefined,
-      allowDuplicate:     allowDuplicate || undefined,
+      allowDuplicate:
+        allowDuplicate || acknowledgedPhone === form.contactPhone.trim() || undefined,
     };
 
     try {
@@ -747,23 +797,24 @@ export default function AddLeadScreen() {
     } catch (err: any) {
       const apiError = err?.response?.data?.error;
       if (apiError?.code === 'DUPLICATE_LEAD') {
-        const found = apiError.details ?? {};
-        const who = found.contactName ? ` (${found.contactName})` : '';
-        const owner = found.assignedToName ? `, assigned to ${found.assignedToName}` : '';
-        Alert.alert(
-          'Possible duplicate',
-          `Lead ${found.leadNumber}${who} already has this phone number${owner}.`,
-          [
-            { text: 'Cancel', style: 'cancel' },
-            ...(found.leadId
-              ? [{ text: 'Open it', onPress: () => router.replace(`/lead/${found.leadId}`) }]
-              : []),
-            {
-              text: edit ? 'Save anyway' : 'Create anyway',
-              onPress: () => void submit(andCreateNew, true),
-            },
-          ]
-        );
+        const found: DuplicateLeadDetails = apiError.details ?? { leadNumber: '' };
+        // Older servers send one match at the top level and no list.
+        const matches = found.matches ?? [
+          {
+            leadNumber: found.leadNumber,
+            stage: 'new' as const,
+            createdAt: new Date().toISOString(),
+            matchedPhone: form.contactPhone.trim(),
+            assignedToName: found.assignedToName,
+            leadId: found.leadId,
+            contactName: found.contactName,
+            canView: Boolean(found.leadId),
+          },
+        ];
+        setDuplicates({ total: found.total ?? matches.length, matches });
+        setPendingCreateNew(andCreateNew);
+        setDuplicateMode('save');
+        setDuplicateOpen(true);
         return;
       }
       Alert.alert('Error', apiError?.message || (edit ? 'Failed to save the lead.' : 'Failed to create lead.'));
@@ -812,7 +863,12 @@ export default function AddLeadScreen() {
             />
           </FieldRow>
 
-          <FieldRow icon="logo-whatsapp" label="WhatsApp Number" required>
+          <FieldRow
+            icon="logo-whatsapp"
+            label="WhatsApp Number"
+            required
+            error={!!liveMatch && liveMatch.total > 0}
+          >
             <RNTextInput
               style={styles.fieldInput}
               placeholder="Enter WhatsApp mobile number"
@@ -822,6 +878,23 @@ export default function AddLeadScreen() {
               onChangeText={set('contactPhone')}
             />
           </FieldRow>
+          {liveMatch && liveMatch.total > 0 ? (
+            <TouchableOpacity
+              style={styles.duplicateHint}
+              onPress={() => {
+                setDuplicates(liveMatch);
+                setDuplicateMode('live');
+                setDuplicateOpen(true);
+              }}
+              accessibilityRole="button"
+            >
+              <Ionicons name="alert-circle" size={15} color={colors.error} />
+              <Text style={styles.duplicateHintText}>
+                {t('duplicates.inline', { count: liveMatch.total })}
+              </Text>
+              <Text style={styles.duplicateHintLink}>{t('duplicates.details')}</Text>
+            </TouchableOpacity>
+          ) : null}
 
           <FieldRow icon="call-outline" label="Second Number">
             <RNTextInput
@@ -1069,6 +1142,30 @@ export default function AddLeadScreen() {
         onClose={() => setShowAssignPicker(false)}
       />
 
+      <DuplicateLeadDialog
+        visible={duplicateOpen && !!duplicates}
+        // While typing, the dialog follows the latest check rather than the
+        // first answer it opened with.
+        total={(duplicateMode === 'live' && liveMatch ? liveMatch : duplicates)?.total ?? 0}
+        matches={(duplicateMode === 'live' && liveMatch ? liveMatch : duplicates)?.matches ?? []}
+        editing={!!edit}
+        mode={duplicateMode}
+        onClose={() => setDuplicateOpen(false)}
+        onViewLead={(leadId) => {
+          setDuplicateOpen(false);
+          router.replace(`/lead/${leadId}`);
+        }}
+        onCreateAnyway={() => {
+          setDuplicateOpen(false);
+          if (duplicateMode === 'live') {
+            // Carry on with the form; the save will not ask about this number again.
+            setAcknowledgedPhone(form.contactPhone.trim());
+            return;
+          }
+          void submit(pendingCreateNew, true);
+        }}
+      />
+
     </KeyboardAvoidingView>
   );
 }
@@ -1076,6 +1173,19 @@ export default function AddLeadScreen() {
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  // Under the number, while it is typed: the duplicate is news before Save.
+  duplicateHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    // Below the row's red underline, never on it.
+    paddingTop: 8,
+    paddingBottom: 10,
+    paddingHorizontal: spacing.md,
+    backgroundColor: `${colors.error}08`,
+  },
+  duplicateHintText: { flex: 1, fontSize: 12.5, color: colors.error },
+  duplicateHintLink: { fontSize: 12.5, fontWeight: '700', color: colors.primary },
   navBar: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -10,6 +10,7 @@ import {
   LeadDocument,
   LeadDocumentKind,
   LibraryDocument,
+  LeadStage,
 } from '../types';
 
 interface LeadFilters {
@@ -59,8 +60,34 @@ export interface CreateLeadData {
   allowDuplicate?: boolean;
 }
 
-/** `error.details` of a 409 `DUPLICATE_LEAD`. `leadId` is present only when the caller can open that lead. */
-export interface DuplicateLeadDetails {
+/** One live lead that already holds the number being entered. */
+export interface DuplicateMatch {
+  leadNumber: string;
+  stage: LeadStage;
+  createdAt: string;
+  /** The lead's number that matched — its main one or its second. */
+  matchedPhone: string;
+  assignedToName?: string;
+  /** Who created it. */
+  createdByName?: string;
+  /** Present only when the caller may open the lead. */
+  leadId?: string;
+  contactName?: string;
+  canView: boolean;
+}
+
+/** Every match (up to a limit) and how many there are in all. */
+export interface DuplicateResult {
+  total: number;
+  matches: DuplicateMatch[];
+}
+
+/**
+ * `error.details` of a 409 `DUPLICATE_LEAD`. The top-level fields describe the
+ * first match, for older builds; `matches` and `total` carry all of them.
+ * `leadId` is present only when the caller can open that lead.
+ */
+export interface DuplicateLeadDetails extends Partial<DuplicateResult> {
   leadNumber: string;
   assignedToName?: string;
   leadId?: string;
@@ -152,6 +179,22 @@ export const leadService = {
   /** Organizers only. Brings back the lead and the work archived with it. */
   async restore(leadId: string): Promise<Lead> {
     const res = await api.post<ApiResponse<Lead>>(`/leads/${leadId}/restore`);
+    return res.data.data;
+  },
+
+  /**
+   * Live leads already holding these numbers — checked while a number is typed,
+   * so the person learns before they fill the rest of the form.
+   */
+  async findDuplicates(
+    phone: string,
+    secondPhone?: string,
+    excludeId?: string
+  ): Promise<DuplicateResult> {
+    const params = new URLSearchParams({ phone });
+    if (secondPhone) params.append('secondPhone', secondPhone);
+    if (excludeId) params.append('excludeId', excludeId);
+    const res = await api.get<ApiResponse<DuplicateResult>>(`/leads/duplicates?${params.toString()}`);
     return res.data.data;
   },
 

@@ -650,10 +650,92 @@ async function matchDropReason(reason: string): Promise<Types.ObjectId | undefin
   return tag?._id;
 }
 
+/** How many matches a duplicate answer lists; the total is always reported. */
+const DUPLICATE_LIMIT = 10;
+
+export interface DuplicateMatch {
+  leadNumber: string;
+  stage: LeadStage;
+  createdAt: Date;
+  /** The phone that matched: the lead's main number or its second one. */
+  matchedPhone: string;
+  assignedToName?: string;
+  /** Who created it — "assigned by" in the reference app. */
+  createdByName?: string;
+  /** Present only when the asker may open the lead. */
+  leadId?: string;
+  contactName?: string;
+  canView: boolean;
+}
+
+/**
+ * Every live lead holding any of these numbers, newest first.
+ *
+ * Each match is described only as far as the asker may see it: its number,
+ * stage, date and owner always — enough to know it exists and whom to ask —
+ * and its customer's name and id only when the asker could open it anyway.
+ */
+export async function findDuplicates(
+  phones: string[],
+  viewer: Viewer,
+  excludeLeadId?: Types.ObjectId
+): Promise<{ total: number; matches: DuplicateMatch[] }> {
+  const numbers = [...new Set(phones.map((phone) => phone?.trim()).filter(Boolean))];
+  if (numbers.length === 0) return { total: 0, matches: [] };
+
+  const query: FilterQuery<ILead> = {
+    isActive: true,
+    $or: [{ contactPhone: { $in: numbers } }, { contactSecondPhone: { $in: numbers } }],
+    ...(excludeLeadId ? { _id: { $ne: excludeLeadId } } : {}),
+  };
+
+  const [total, leads] = await Promise.all([
+    Lead.countDocuments(query),
+    Lead.find(query)
+      .select('leadNumber contactName contactPhone contactSecondPhone stage createdAt assignedTo createdBy')
+      .populate('assignedTo', 'name')
+      .populate('createdBy', 'name')
+      .sort({ createdAt: -1 })
+      .limit(DUPLICATE_LIMIT)
+      .lean<
+        Array<{
+          _id: Types.ObjectId;
+          leadNumber: string;
+          contactName: string;
+          contactPhone: string;
+          contactSecondPhone?: string;
+          stage: LeadStage;
+          createdAt: Date;
+          assignedTo?: { _id: Types.ObjectId; name: string } | null;
+          createdBy?: { _id: Types.ObjectId; name: string } | null;
+        }>
+      >(),
+  ]);
+
+  const matches = leads.map<DuplicateMatch>((lead) => {
+    const canView = canSeeLead(
+      { assignedTo: lead.assignedTo?._id, createdBy: lead.createdBy?._id as Types.ObjectId },
+      viewer
+    );
+    return {
+      leadNumber: lead.leadNumber,
+      stage: lead.stage,
+      createdAt: lead.createdAt,
+      matchedPhone: numbers.includes(lead.contactPhone) ? lead.contactPhone : lead.contactSecondPhone ?? '',
+      assignedToName: lead.assignedTo?.name,
+      createdByName: lead.createdBy?.name,
+      canView,
+      ...(canView ? { leadId: lead._id.toString(), contactName: lead.contactName } : {}),
+    };
+  });
+
+  return { total, matches };
+}
+
 /**
  * One phone number, one live lead — unless the person, having been told, says
- * otherwise. The answer names the existing lead only as far as the asker may
- * see it: its number always, its contact and id only when it is theirs.
+ * otherwise. The error carries every match (up to a limit) so the app can show
+ * them; the first match's fields stay at the top level for older builds.
  */
 async function assertNotDuplicate(
   phone: string,
@@ -661,34 +743,20 @@ async function assertNotDuplicate(
   excludeLeadId?: Types.ObjectId
 ): Promise<void> {
   if (!phone) return;
-  const existing = await Lead.findOne({
-    isActive: true,
-    $or: [{ contactPhone: phone }, { contactSecondPhone: phone }],
-    ...(excludeLeadId ? { _id: { $ne: excludeLeadId } } : {}),
-  })
-    .select('leadNumber contactName assignedTo createdBy')
-    .lean<{
-      _id: Types.ObjectId;
-      leadNumber: string;
-      contactName: string;
-      assignedTo?: Types.ObjectId;
-      createdBy: Types.ObjectId;
-    }>();
-  if (!existing) return;
-
-  const visible = canSeeLead(existing, viewer);
-  const owner = existing.assignedTo
-    ? await User.findById(existing.assignedTo).select('name').lean<{ name: string }>()
-    : null;
+  const { total, matches } = await findDuplicates([phone], viewer, excludeLeadId);
+  const first = matches[0];
+  if (!first) return;
 
   throw new AppError(
-    `A lead with this phone number already exists (${existing.leadNumber}).`,
+    `A lead with this phone number already exists (${first.leadNumber}).`,
     409,
     'DUPLICATE_LEAD',
     {
-      leadNumber: existing.leadNumber,
-      assignedToName: owner?.name,
-      ...(visible ? { leadId: existing._id.toString(), contactName: existing.contactName } : {}),
+      leadNumber: first.leadNumber,
+      assignedToName: first.assignedToName,
+      ...(first.canView ? { leadId: first.leadId, contactName: first.contactName } : {}),
+      total,
+      matches,
     }
   );
 }
