@@ -55,6 +55,8 @@ export interface CreateLeadData {
   gstNumber?: string;
   assignedTo?: string;
   nextFollowUpAt?: string;
+  /** Alerts before the follow-up, in minutes — "5 minutes before", "1 hour before". */
+  reminderMinutesBefore?: number[];
   notes?: string;
   /** Sent after the person has seen the duplicate warning and chosen to go ahead. */
   allowDuplicate?: boolean;

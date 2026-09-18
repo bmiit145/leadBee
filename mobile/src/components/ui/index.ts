@@ -34,5 +34,6 @@ export { MultiReminderPicker } from './MultiReminderPicker';
 export { CommentComposer } from './CommentComposer';
 export { ThreadComposer } from './ThreadComposer';
 export { SegmentedToggle } from './SegmentedToggle';
+export { AnimatedChevrons } from './AnimatedChevrons';
 export { MembersPickerModal } from './MembersPickerModal';
 export { ListCard, ListRow, ListSectionTitle } from './ListRow';

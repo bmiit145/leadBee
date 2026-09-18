@@ -198,16 +198,19 @@ function TodaysReminder() {
   const router = useRouter();
   const [tab, setTab] = useState<'lead' | 'meeting' | 'task'>('lead');
 
+  // Keyed under `leads`, `meetings` and `tasks`, so setting a reminder, booking
+  // a meeting or finishing a task anywhere refreshes this card — it used to keep
+  // saying "Nothing due today" until the app was restarted.
   const leadsQuery = useQuery({
-    queryKey: ['home-reminder-leads'],
+    queryKey: [...queryKeys.leads.all, 'home-reminder'],
     queryFn: () => leadService.getAll({ reminderScope: 'today', limit: 5 }),
   });
   const meetingsQuery = useQuery({
-    queryKey: ['home-reminder-meetings'],
+    queryKey: [...queryKeys.meetings.all, 'home-reminder'],
     queryFn: () => meetingService.getAll({ scope: 'today', status: 'scheduled', limit: 5 }),
   });
   const tasksQuery = useQuery({
-    queryKey: ['home-reminder-tasks'],
+    queryKey: [...queryKeys.tasks.all, 'home-reminder'],
     queryFn: () => taskService.getAll({ scope: 'today', limit: 5 }),
   });
 

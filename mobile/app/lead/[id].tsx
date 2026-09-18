@@ -8,7 +8,11 @@ import {
   Alert,
   ActivityIndicator,
   TextInput,
+  LayoutAnimation,
+  Platform,
+  UIManager,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -21,7 +25,14 @@ import { QuickReplyPanel } from '../../src/components/QuickReplyPanel';
 import { LeadDocumentsPanel } from '../../src/components/LeadDocumentsPanel';
 import { LeadClientDetailsPanel } from '../../src/components/LeadClientDetailsPanel';
 import { LeadWorkPanel } from '../../src/components/LeadWorkPanel';
-import { ScreenHeader, UnderlineTabs, StatusChip, CenterDialog } from '../../src/components/ui';
+import {
+  ScreenHeader,
+  UnderlineTabs,
+  StatusChip,
+  CenterDialog,
+  AnimatedChevrons,
+  initialsOf,
+} from '../../src/components/ui';
 import type { HeaderAction, UnderlineTab } from '../../src/components/ui';
 import { useAuth } from '../../src/stores/auth.store';
 import { LeadStage } from '../../src/types';
@@ -65,6 +76,14 @@ const TABS: UnderlineTab[] = [
 
 const THREAD_TABS = new Set(['timeline', 'ask_query', 'notes']);
 
+/** How far the details handle rises above the tab panel — half its height. */
+const HANDLE_OVERLAP = 14;
+
+// Older Android builds animate layout changes only when asked; newer ones ignore this.
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
 export default function LeadDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -74,6 +93,15 @@ export default function LeadDetailScreen() {
   const qc = useQueryClient();
 
   const [tab, setTab] = useState('timeline');
+
+  // The lead summary folds away so the Time Line and the other tabs get the
+  // screen — a long conversation should not scroll inside a sliver. Collapsed,
+  // the customer stays named at the top, so it is always clear whose lead this is.
+  const [detailsOpen, setDetailsOpen] = useState(true);
+  const toggleDetails = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setDetailsOpen((open) => !open);
+  };
   const [reminderStage, setReminderStage] = useState<LeadStage | null>(null);
   const [dropReasonOpen, setDropReasonOpen] = useState(false);
   const [dropReason, setDropReason] = useState('');
@@ -121,6 +149,18 @@ export default function LeadDetailScreen() {
     },
   });
 
+  // A reminder on the lead's current stage is a follow-up date, not a stage
+  // change: it goes through the lead itself, so no "moved to…" appears on the
+  // timeline for a move that did not happen.
+  const reminderMutation = useMutation({
+    mutationFn: (input: { nextFollowUpAt: string; reminderMinutesBefore?: number[] }) =>
+      leadService.update(id, input),
+    onSuccess: invalidateLead,
+    onError: (err: any) => {
+      Alert.alert('Error', err?.response?.data?.error?.message || 'Failed to set the reminder.');
+    },
+  });
+
   const bookmarkMutation = useMutation({
     mutationFn: () => leadService.toggleBookmark(id),
     onSuccess: invalidateLead,
@@ -157,16 +197,24 @@ export default function LeadDetailScreen() {
     if (nextTab) setTab(nextTab.key);
   };
 
+  // Same order and meaning as the reference app: reminder, meeting, then edit.
+  // Each icon says what it does — the calendar is the date to call back, and a
+  // meeting is people — with the task shortcut marked as a task.
   const headerActions = useMemo<HeaderAction[]>(() => {
     const actions: HeaderAction[] = [
-      { icon: 'calendar-outline', accessibilityLabel: 'Schedule meeting', onPress: () => router.push(`/meeting/create?leadId=${id}`) },
-      { icon: 'people-outline', accessibilityLabel: 'Create task', onPress: () => router.push(`/task/create?leadId=${id}`) },
+      {
+        icon: 'alarm-outline',
+        accessibilityLabel: 'Set reminder',
+        onPress: () => lead && setReminderStage(lead.stage as LeadStage),
+      },
+      { icon: 'people-outline', accessibilityLabel: 'Schedule meeting', onPress: () => router.push(`/meeting/create?leadId=${id}`) },
+      { icon: 'clipboard-outline', accessibilityLabel: 'Create task', onPress: () => router.push(`/task/create?leadId=${id}`) },
     ];
     if (canEditLead) {
       actions.push({ icon: 'create-outline', accessibilityLabel: 'Edit lead', onPress: () => router.push(`/lead/add?edit=${id}`) });
     }
     return actions;
-  }, [id, canEditLead, router]);
+  }, [id, canEditLead, router, lead]);
 
   if (isLoading) {
     return (
@@ -226,14 +274,75 @@ export default function LeadDetailScreen() {
   return (
     <View style={styles.fill}>
       <ScreenHeader title="Lead Details" actions={headerActions}>
-        <LeadDetailHeader
-          lead={lead}
-          onToggleBookmark={() => bookmarkMutation.mutate()}
-          bookmarkPending={bookmarkMutation.isPending}
-        />
+        {detailsOpen ? (
+          // Room below the action buttons for the handle, so it never covers
+          // — or takes taps from — the bottom of Bookmark, WhatsApp and Call.
+          <View style={{ paddingBottom: HANDLE_OVERLAP }}>
+            <LeadDetailHeader
+              lead={lead}
+              onToggleBookmark={() => bookmarkMutation.mutate()}
+              bookmarkPending={bookmarkMutation.isPending}
+            />
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={styles.collapsedBar}
+            onPress={toggleDetails}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel={t('leadHeader.show')}
+          >
+            <View style={styles.collapsedAvatar}>
+              <Text style={styles.collapsedInitials}>{initialsOf(lead.contactName)}</Text>
+            </View>
+            <Text style={styles.collapsedName} numberOfLines={1}>
+              {lead.contactName}
+            </Text>
+            <StatusChip
+              label={(LEAD_STAGE_META[lead.stage] ?? LEAD_STAGE_META.new).label}
+              color={(LEAD_STAGE_META[lead.stage] ?? LEAD_STAGE_META.new).color}
+              filled
+            />
+          </TouchableOpacity>
+        )}
       </ScreenHeader>
 
-      <UnderlineTabs tabs={TABS} active={tab} onChange={setTab} />
+      {detailsOpen ? (
+        // Open: a small handle straddles the seam. The view is pulled up by half
+        // the handle so the handle stays inside it — Android delivers no touches
+        // to the part of a child that hangs outside its parent.
+        <View style={styles.tabsWrap}>
+          <UnderlineTabs tabs={TABS} active={tab} onChange={setTab} />
+          <View style={styles.handleRow} pointerEvents="box-none">
+            <TouchableOpacity
+              style={styles.handle}
+              onPress={toggleDetails}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel={t('leadHeader.hide')}
+              accessibilityState={{ expanded: true }}
+            >
+              <AnimatedChevrons direction="up" size={13} color={colors.text} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : (
+        // Folded: the whole width becomes the control, as in the reference app —
+        // a target nobody has to aim for, with the arrows saying which way it goes.
+        <View>
+          <TouchableOpacity
+            style={styles.foldRow}
+            onPress={toggleDetails}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={t('leadHeader.show')}
+            accessibilityState={{ expanded: false }}
+          >
+            <AnimatedChevrons direction="down" size={13} color={colors.textSecondary} />
+          </TouchableOpacity>
+          <UnderlineTabs tabs={TABS} active={tab} onChange={setTab} style={styles.tabsUnderFold} />
+        </View>
+      )}
 
       <View
         style={styles.tabContent}
@@ -278,10 +387,17 @@ export default function LeadDetailScreen() {
         visible={reminderStage !== null}
         onDismiss={() => setReminderStage(null)}
         initialStage={reminderStage ?? 'new'}
-        onSkip={(stage) => stageMutation.mutate({ stage })}
-        onUpdate={(stage, nextFollowUpAt, reminderMinutesBefore) =>
-          stageMutation.mutate({ stage, nextFollowUpAt: nextFollowUpAt.toISOString(), reminderMinutesBefore })
-        }
+        onSkip={(stage) => {
+          // Skipping the reminder on the current stage leaves everything as it was.
+          if (stage !== lead.stage) stageMutation.mutate({ stage });
+        }}
+        onUpdate={(stage, nextFollowUpAt, reminderMinutesBefore) => {
+          if (stage === lead.stage) {
+            reminderMutation.mutate({ nextFollowUpAt: nextFollowUpAt.toISOString(), reminderMinutesBefore });
+            return;
+          }
+          stageMutation.mutate({ stage, nextFollowUpAt: nextFollowUpAt.toISOString(), reminderMinutesBefore });
+        }}
       />
 
       <CenterDialog visible={dropReasonOpen} onDismiss={() => setDropReasonOpen(false)} title={t('leadDrop.title')}>
@@ -349,6 +465,64 @@ export default function LeadDetailScreen() {
 const styles = StyleSheet.create({
   fill: { flex: 1, backgroundColor: colors.background },
   tabContent: { flex: 1 },
+  // Collapsed summary: enough to know whose lead this is, and one tap to reopen.
+  collapsedBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: spacing.md,
+    paddingTop: 4,
+    paddingBottom: 18,
+  },
+  collapsedAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  collapsedInitials: { fontSize: 12.5, fontWeight: '800', color: colors.primary },
+  collapsedName: { flex: 1, fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
+  tabsWrap: { marginTop: -HANDLE_OVERLAP, paddingTop: HANDLE_OVERLAP },
+  // The folded control: the panel's own rounded top, lightly tinted, full width.
+  foldRow: {
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    // A faint tint sets the row apart from the tabs below it, as the reference
+    // app's strip does, so it reads as a control rather than empty space.
+    backgroundColor: '#F2F2F4',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.borderLight,
+  },
+  // Under the fold row the tabs are a continuation of the panel, not a second one.
+  tabsUnderFold: { borderTopLeftRadius: 0, borderTopRightRadius: 0, elevation: 0, shadowOpacity: 0 },
+  handleRow: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 10,
+    elevation: 10,
+  },
+  handle: {
+    width: 44,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.12,
+    shadowRadius: 3,
+  },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   errorText: { fontSize: 16, color: colors.textSecondary },
   scroll: { padding: spacing.md, gap: spacing.md },

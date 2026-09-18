@@ -18,6 +18,13 @@ interface Props {
   onDelete?: (lead: Lead) => void;
 }
 
+/** Priority, as the lead list's quality filter names it. */
+const PRIORITY_META: Record<string, { label: string; color: string }> = {
+  hot: { label: 'High', color: '#EF4444' },
+  warm: { label: 'Medium', color: '#F97316' },
+  cold: { label: 'Low', color: '#3B82F6' },
+};
+
 function sourceLabel(source: string): string {
   return source
     .split('_')
@@ -33,6 +40,7 @@ function sourceLabel(source: string): string {
 export function LeadCard({ lead, onPress, onDelete }: Props) {
   const qc = useQueryClient();
   const stage = LEAD_STAGE_META[lead.stage] ?? LEAD_STAGE_META.new;
+  const priority = lead.priority ? PRIORITY_META[lead.priority] : undefined;
   const assignedName =
     typeof lead.assignedTo === 'object' && lead.assignedTo !== null
       ? (lead.assignedTo as any).name
@@ -94,7 +102,7 @@ export function LeadCard({ lead, onPress, onDelete }: Props) {
 
         <View style={styles.divider} />
 
-        {/* Meta: LEAD DATE / SOURCE */}
+        {/* Meta: LEAD DATE / PURPOSE / SOURCE, as the reference app lists them */}
         <View style={styles.metaGrid}>
           <View style={styles.metaRow}>
             <Text style={styles.metaLabel}>LEAD DATE</Text>
@@ -105,6 +113,13 @@ export function LeadCard({ lead, onPress, onDelete }: Props) {
               })}
             </Text>
           </View>
+          {lead.interestedIn ? (
+            <View style={styles.metaRow}>
+              <Text style={styles.metaLabel}>PURPOSE</Text>
+              <Text style={styles.metaColon}>:</Text>
+              <Text style={styles.metaValue} numberOfLines={1}>{lead.interestedIn}</Text>
+            </View>
+          ) : null}
           <View style={styles.metaRow}>
             <Text style={styles.metaLabel}>SOURCE</Text>
             <Text style={styles.metaColon}>:</Text>
@@ -115,7 +130,8 @@ export function LeadCard({ lead, onPress, onDelete }: Props) {
         </View>
 
         <View style={styles.tagsRow}>
-          <StatusChip label={stage.label} color={stage.color} dot />
+          <StatusChip label={stage.label} color={stage.color} dot size="lg" />
+          {priority ? <StatusChip label={priority.label} color={priority.color} size="lg" /> : null}
           {assignedName ? (
             <View style={styles.assignedTag}>
               <Ionicons name="person-outline" size={11} color={colors.textSecondary} />
@@ -138,6 +154,7 @@ export function LeadCard({ lead, onPress, onDelete }: Props) {
         isBookmarked={isBookmarked}
         onToggleBookmark={() => bookmarkMutation.mutate()}
         bookmarkPending={bookmarkMutation.isPending}
+        size="compact"
       />
     </View>
   );
@@ -185,11 +202,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
+  // Read at a glance down a long list, so a size up from body text.
   metaGrid: { gap: 3 },
   metaRow: { flexDirection: 'row', gap: 6 },
-  metaLabel: { fontSize: 12, fontWeight: '700', color: colors.text, minWidth: 74 },
-  metaColon: { fontSize: 12, color: colors.text },
-  metaValue: { fontSize: 12, color: colors.textSecondary, flex: 1 },
+  metaLabel: { fontSize: 15, fontWeight: '700', color: colors.text, minWidth: 100 },
+  metaColon: { fontSize: 15, fontWeight: '700', color: colors.text },
+  metaValue: { fontSize: 15, color: colors.text, flex: 1 },
   tagsRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -201,7 +219,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 3,
   },
-  assignedText: { fontSize: 11, color: colors.textSecondary, maxWidth: 90 },
+  assignedText: { fontSize: 13, color: colors.textSecondary, maxWidth: 110 },
   overduePill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -211,5 +229,5 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 99,
   },
-  overdueText: { fontSize: 11, color: '#EF4444', fontWeight: '700' },
+  overdueText: { fontSize: 12, color: '#EF4444', fontWeight: '700' },
 });

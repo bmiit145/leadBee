@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, StyleProp, ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { borderRadius } from '../../theme';
 
-export type ChipSize = 'sm' | 'md';
+export type ChipSize = 'sm' | 'md' | 'lg';
 
 interface Props {
   label: string;
@@ -27,7 +27,7 @@ interface Props {
  * rather than being re-derived with `color + '1A'` at each call site.
  */
 export function StatusChip({ label, color, size = 'sm', filled = false, dot = false, icon, style }: Props) {
-  const dims = size === 'md' ? SIZES.md : SIZES.sm;
+  const dims = SIZES[size];
   const textColor = filled ? '#FFFFFF' : dot ? '#1F2933' : color;
   const showIcon = icon && !dot;
 
@@ -47,7 +47,7 @@ export function StatusChip({ label, color, size = 'sm', filled = false, dot = fa
     >
       {dot && <View style={[styles.dot, { backgroundColor: color }]} />}
       {showIcon && <Ionicons name={icon} size={dims.font} color={textColor} />}
-      <Text style={[styles.text, { fontSize: dims.font, color: textColor }, dot && styles.dotText]} numberOfLines={1}>
+      <Text style={[styles.text, { fontSize: dims.font, color: textColor }, dot && size !== 'lg' && styles.dotText]} numberOfLines={1}>
         {label}
       </Text>
     </View>
@@ -57,6 +57,8 @@ export function StatusChip({ label, color, size = 'sm', filled = false, dot = fa
 const SIZES = {
   sm: { padX: 9, padY: 3, font: 11 },
   md: { padX: 11, padY: 5, font: 12 },
+  // Lead cards, where stage and priority are read first.
+  lg: { padX: 11, padY: 3, font: 13 },
 };
 
 const styles = StyleSheet.create({

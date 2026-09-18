@@ -147,6 +147,10 @@
     "noTasks": "No tasks on this lead yet.",
     "loadFailed": "Couldn't load. Pull to refresh."
   },
+  "leadHeader": {
+    "hide": "Hide lead details",
+    "show": "Show lead details"
+  },
   "duplicates": {
     "title": "Lead already exists",
     "subtitle_one": "This number is already linked to an existing lead.",

@@ -327,7 +327,7 @@ export default function LeadListScreen() {
         data={STAGE_TABS}
         keyExtractor={item => item.value}
         style={styles.tabsRow}
-        contentContainerStyle={{ paddingHorizontal: spacing.md, gap: 8 }}
+        contentContainerStyle={{ paddingHorizontal: spacing.md, paddingVertical: 2, gap: 8 }}
         renderItem={({ item }) => {
           const isActive = selectedStage === item.value;
           const count    = getTabCount(stats, item.statKey);
@@ -668,7 +668,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
   filterBadgeText: { fontSize: 10, color: '#fff', fontWeight: '800' },
-  tabsRow: { maxHeight: 44, marginBottom: 8 },
+  // Sized by its chips, not a fixed height, so larger system fonts aren't clipped;
+  // flexGrow 0 stops the horizontal list from taking the page's spare height.
+  tabsRow: { flexGrow: 0, flexShrink: 0, marginBottom: 8 },
   tab: {
     paddingHorizontal: 16, paddingVertical: 8,
     borderRadius: 99, borderWidth: 1.5,
