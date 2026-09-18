@@ -691,7 +691,8 @@
   "drawer": {
     "notifications": "Notifications",
     "quickReplies": "Quick Replies",
-    "documents": "Document"
+    "documents": "Document",
+    "callReport": "Call Report"
   },
   "home": {
     "dropTags": "Lead Drop Tags",

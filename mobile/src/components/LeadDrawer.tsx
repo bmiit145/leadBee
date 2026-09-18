@@ -9,6 +9,7 @@ import {
   Pressable,
   Image,
   Dimensions,
+  Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
@@ -34,6 +35,15 @@ interface Props {
   onClose: () => void;
 }
 
+type IconName = keyof typeof Ionicons.glyphMap;
+
+/** One row of the menu, in the order it is drawn. */
+type MenuEntry =
+  | { kind: 'group'; label: string; icon: IconName; items: { label: string; onPress: () => void }[] }
+  | { kind: 'link'; label: string; icon: IconName; onPress: () => void; tone?: 'danger' }
+  | { kind: 'soon'; label: string; icon: IconName }
+  | { kind: 'divider'; key: string };
+
 /**
  * The Lead module's slide-in menu, reachable from the hamburger on every
  * screen in the `(leads)` group. Lives here rather than inside one screen so
@@ -43,7 +53,7 @@ export function LeadDrawer({ visible, onClose }: Props) {
   const router = useRouter();
   const { t } = useTranslation();
   const translateX = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
-  const { user, organization } = useAuth();
+  const { user, organization, logout } = useAuth();
   const { openSwitcher } = useOrganizationSwitcher();
 
   /**
@@ -76,43 +86,71 @@ export function LeadDrawer({ visible, onClose }: Props) {
     router.push(path as any);
   };
 
-  const sections = [
+  const confirmLogout = () => {
+    Alert.alert(t('profile.logoutConfirmTitle'), t('profile.logoutConfirmMessage'), [
+      { text: t('common.cancel'), style: 'cancel' },
+      {
+        text: t('common.logout'),
+        style: 'destructive',
+        onPress: async () => {
+          onClose();
+          await logout();
+          router.replace('/(auth)/login');
+        },
+      },
+    ]);
+  };
+
+  /*
+   * Ordered by how often a salesperson reaches for each, as the reference app
+   * orders them: the daily work (leads, tasks, meetings) first, then the tools
+   * used during that work, then what is opened now and then, and the account
+   * rows last. Rows with a sub-menu sit in that same order rather than being
+   * grouped apart from the plain links.
+   */
+  const menu: MenuEntry[] = [
+    // Daily work
     {
-      section: 'Leads',
-      icon: 'people-outline' as const,
+      kind: 'group',
+      label: 'Leads',
+      icon: 'people-outline',
       items: [
         { label: 'Create New Lead', onPress: () => nav('/lead/add') },
         { label: 'All Leads', onPress: () => nav('/lead/list') },
       ],
     },
     {
-      section: 'Task',
-      icon: 'clipboard-outline' as const,
+      kind: 'group',
+      label: 'Task',
+      icon: 'clipboard-outline',
       items: [
         { label: 'Create New Task', onPress: () => nav('/task/create') },
         { label: 'My Tasks', onPress: () => nav('/task/list') },
       ],
     },
-  ];
-
-  const directItems = [
-    { label: 'Meeting', icon: 'people-circle-outline' as const, onPress: () => nav('/meeting/list') },
-    { label: 'BookMarks', icon: 'bookmark-outline' as const, onPress: () => nav('/bookmarks') },
-    // Call Report, as two destinations rather than a group that has to be expanded.
-    { label: t('calls.title'), icon: 'call-outline' as const, onPress: () => nav('/call') },
+    { kind: 'link', label: 'Meeting', icon: 'people-circle-outline', onPress: () => nav('/meeting/list') },
+    { kind: 'link', label: 'BookMarks', icon: 'bookmark-outline', onPress: () => nav('/bookmarks') },
+    // Tools used during that work
     {
-      label: t('calls.analytics.title'),
-      icon: 'bar-chart-outline' as const,
-      onPress: () => nav('/call/analytics'),
+      kind: 'group',
+      label: t('drawer.callReport'),
+      icon: 'call-outline',
+      items: [
+        { label: t('calls.title'), onPress: () => nav('/call') },
+        { label: t('calls.analytics.title'), onPress: () => nav('/call/analytics') },
+      ],
     },
-    { label: t('drawer.notifications'), icon: 'notifications-outline' as const, onPress: () => nav('/notifications') },
-    { label: t('drawer.quickReplies'), icon: 'chatbubble-outline' as const, onPress: () => nav('/quick-replies') },
-    { label: t('drawer.documents'), icon: 'document-outline' as const, onPress: () => nav('/documents') },
-  ];
-
-  const comingSoon = [
-    { label: 'Announcement', icon: 'megaphone-outline' as const },
-    { label: 'Attendance', icon: 'calendar-outline' as const },
+    { kind: 'link', label: t('drawer.quickReplies'), icon: 'chatbubble-outline', onPress: () => nav('/quick-replies') },
+    { kind: 'link', label: t('drawer.documents'), icon: 'document-outline', onPress: () => nav('/documents') },
+    // Now and then — the bell on Home is the usual way in to notifications.
+    { kind: 'link', label: t('drawer.notifications'), icon: 'notifications-outline', onPress: () => nav('/notifications') },
+    { kind: 'soon', label: 'Announcement', icon: 'megaphone-outline' },
+    { kind: 'soon', label: 'Attendance', icon: 'calendar-outline' },
+    // Account
+    { kind: 'divider', key: 'account' },
+    { kind: 'link', label: t('profile.title'), icon: 'person-circle-outline', onPress: () => nav('/(leads)/profile') },
+    { kind: 'link', label: t('settings.title'), icon: 'settings-outline', onPress: () => nav('/account/settings') },
+    { kind: 'link', label: t('common.logout'), icon: 'log-out-outline', tone: 'danger', onPress: confirmLogout },
   ];
 
   if (!visible) return null;
@@ -157,31 +195,69 @@ export function LeadDrawer({ visible, onClose }: Props) {
 
           <View style={styles.divider} />
 
-          {sections.map((section) => {
-            const isOpen = openSection === section.section;
+          {menu.map((entry) => {
+            if (entry.kind === 'divider') {
+              return <View key={entry.key} style={styles.divider} />;
+            }
+
+            if (entry.kind === 'soon') {
+              return (
+                <View key={entry.label} style={styles.sectionHeader}>
+                  <View style={styles.sectionIcon}>
+                    <Ionicons name={entry.icon} size={20} color={colors.textSecondary} />
+                  </View>
+                  <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>{entry.label}</Text>
+                  <View style={styles.soonBadge}>
+                    <Text style={styles.soonText}>SOON</Text>
+                  </View>
+                </View>
+              );
+            }
+
+            if (entry.kind === 'link') {
+              const danger = entry.tone === 'danger';
+              return (
+                <TouchableOpacity
+                  key={entry.label}
+                  style={styles.sectionHeader}
+                  onPress={entry.onPress}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                >
+                  <View style={[styles.sectionIcon, danger && styles.dangerIcon]}>
+                    <Ionicons name={entry.icon} size={20} color={danger ? colors.error : colors.primary} />
+                  </View>
+                  <Text style={[styles.sectionLabel, danger && { color: colors.error }]}>{entry.label}</Text>
+                </TouchableOpacity>
+              );
+            }
+
+            const isOpen = openSection === entry.label;
             return (
-              <View key={section.section}>
+              <View key={entry.label}>
                 {/* The header carries a chevron, so it has to actually fold —
                     it drew one either way before, and tapping it did nothing. */}
                 <TouchableOpacity
-                  style={styles.sectionHeader}
-                  onPress={() => toggleSection(section.section)}
+                  style={[styles.sectionHeader, isOpen && styles.sectionHeaderOpen]}
+                  onPress={() => toggleSection(entry.label)}
                   activeOpacity={0.75}
                   accessibilityRole="button"
                   accessibilityState={{ expanded: isOpen }}
                 >
                   <View style={styles.sectionIcon}>
-                    <Ionicons name={section.icon} size={20} color={colors.primary} />
+                    <Ionicons name={entry.icon} size={20} color={colors.primary} />
                   </View>
-                  <Text style={styles.sectionLabel}>{section.section}</Text>
+                  <Text style={styles.sectionLabel}>{entry.label}</Text>
+                  {/* ">" marks a row that holds a sub-menu; it turns down once unfolded.
+                      Rows that go straight to a screen carry no chevron. */}
                   <Ionicons
-                    name={isOpen ? 'chevron-up' : 'chevron-down'}
+                    name={isOpen ? 'chevron-down' : 'chevron-forward'}
                     size={16}
-                    color={colors.textSecondary}
+                    color={isOpen ? colors.primary : colors.textSecondary}
                   />
                 </TouchableOpacity>
                 {isOpen &&
-                  section.items.map((item) => (
+                  entry.items.map((item) => (
                     <TouchableOpacity
                       key={item.label}
                       style={styles.subItem}
@@ -192,38 +268,9 @@ export function LeadDrawer({ visible, onClose }: Props) {
                       <Text style={styles.subLabel}>{item.label}</Text>
                     </TouchableOpacity>
                   ))}
-                <View style={styles.divider} />
               </View>
             );
           })}
-
-          {directItems.map((item) => (
-            <TouchableOpacity
-              key={item.label}
-              style={styles.sectionHeader}
-              onPress={item.onPress}
-              activeOpacity={0.75}
-            >
-              <View style={styles.sectionIcon}>
-                <Ionicons name={item.icon} size={20} color={colors.primary} />
-              </View>
-              <Text style={styles.sectionLabel}>{item.label}</Text>
-              <Ionicons name="chevron-forward-outline" size={16} color={colors.textSecondary} />
-            </TouchableOpacity>
-          ))}
-          <View style={styles.divider} />
-
-          {comingSoon.map((item) => (
-            <View key={item.label} style={styles.sectionHeader}>
-              <View style={styles.sectionIcon}>
-                <Ionicons name={item.icon} size={20} color={colors.textSecondary} />
-              </View>
-              <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>{item.label}</Text>
-              <View style={styles.soonBadge}>
-                <Text style={styles.soonText}>SOON</Text>
-              </View>
-            </View>
-          ))}
         </ScrollView>
 
         <View style={styles.footer}>
@@ -277,6 +324,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  sectionHeaderOpen: { backgroundColor: '#F8F9FF' },
+  dangerIcon: { backgroundColor: `${colors.error}15` },
   sectionLabel: { flex: 1, fontSize: 15, fontWeight: '700', color: colors.text },
   subItem: {
     flexDirection: 'row',

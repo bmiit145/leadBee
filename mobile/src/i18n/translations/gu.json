@@ -691,7 +691,8 @@
   "drawer": {
     "notifications": "સૂચનાઓ",
     "quickReplies": "ઝડપી જવાબો",
-    "documents": "દસ્તાવેજ"
+    "documents": "દસ્તાવેજ",
+    "callReport": "કૉલ રિપોર્ટ"
   },
   "home": {
     "dropTags": "લીડ ડ્રોપ ટૅગ્સ",
