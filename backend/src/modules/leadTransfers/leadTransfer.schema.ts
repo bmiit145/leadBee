@@ -13,10 +13,16 @@ export const createTransferBody = z.object({
   leadId: objectIdSchema,
   toUserId: objectIdSchema,
   /**
-   * Required. "Why is this customer moving?" is the first question a manager
-   * reviewing the history asks, and the recipient needs it to decide.
+   * Optional, as in other CRMs' ownership transfer: forcing a reason on every
+   * routine hand-off produces "ok" and "." rather than information. Recorded
+   * when given; blank is the same as absent.
    */
-  reason: z.string().trim().min(3).max(500),
+  reason: z
+    .string()
+    .trim()
+    .max(500)
+    .optional()
+    .transform((value) => value || undefined),
 });
 
 export const decideTransferBody = z.object({

@@ -1085,12 +1085,12 @@ async function main(): Promise<void> {
     recipientRows
   );
 
-  const noReason = await inject('POST', '/api/v1/lead-transfers', agentAuth, {
+  const overlongReason = await inject('POST', '/api/v1/lead-transfers', agentAuth, {
     leadId: transferLeadId,
     toUserId: managerId,
-    reason: ' ',
+    reason: 'x'.repeat(501),
   });
-  check('A transfer needs a reason', noReason.statusCode === 422, noReason.statusCode);
+  check('A transfer reason is capped at 500 characters', overlongReason.statusCode === 422, overlongReason.statusCode);
 
   const toCurrentOwner = await inject('POST', '/api/v1/lead-transfers', agentAuth, {
     leadId: transferLeadId,
@@ -1213,12 +1213,17 @@ async function main(): Promise<void> {
     direct.json()
   );
 
+  // No reason at all: a routine hand-off needs no explanation.
   const toDecline = await inject('POST', '/api/v1/lead-transfers', agentAuth, {
     leadId: transferLeadId,
     toUserId: managerId,
-    reason: 'Smoke: will be declined',
   });
   transferIds.push(toDecline.json()?.data?.transfer?._id);
+  check(
+    'A transfer can be requested without a reason',
+    toDecline.statusCode === 201 && !('reason' in (toDecline.json()?.data?.transfer ?? {})),
+    toDecline.json()
+  );
   const declined = await inject(
     'POST',
     `/api/v1/lead-transfers/${toDecline.json()?.data?.transfer?._id}/decline`,

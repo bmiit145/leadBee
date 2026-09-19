@@ -327,7 +327,8 @@ export interface LeadTransfer {
   toUserName: string;
   requestedBy: string;
   requestedByName: string;
-  reason: string;
+  /** Optional — absent when the sender gave none. */
+  reason?: string;
   status: LeadTransferStatus;
   decidedBy?: string;
   decidedByName?: string;

@@ -21,9 +21,24 @@ import { toTitleCase } from '../../utils/format';
 import { tapFeedback, warningFeedback } from '../../utils/haptics';
 import type { TransferRecipient } from '../../types';
 
-/** The server's minimum — kept equal so the button enables exactly when it would accept. */
-const MIN_REASON = 3;
+/** The server's ceiling. */
 const MAX_REASON = 500;
+
+/**
+ * The usual reasons a lead changes hands, one tap each — the same idea as the
+ * canned chips on Notes. Keys under `transfers.suggestions`.
+ */
+const REASON_SUGGESTIONS = [
+  'onLeave',
+  'area',
+  'workload',
+  'customerAsked',
+  'language',
+  'expertise',
+] as const;
+
+/** Joins picked suggestions and anything typed into one reason. */
+const SEPARATOR = ', ';
 
 interface Props {
   visible: boolean;
@@ -36,10 +51,11 @@ interface Props {
 }
 
 /**
- * Hand a lead to a colleague: who, and why.
+ * Hand a lead to a colleague: who, and — if worth saying — why.
  *
- * The reason is required because the recipient decides on it, and it is the
- * first thing anyone reading the lead's history later wants to know.
+ * The reason is optional, as in standard CRM ownership transfer. A forced
+ * reason on every routine hand-off gets filled with "ok"; the suggestions make
+ * a real one a single tap instead.
  */
 export function TransferLeadSheet({ visible, onDismiss, leadId, ownerId, isOrganizer }: Props) {
   const { t } = useTranslation();
@@ -71,7 +87,7 @@ export function TransferLeadSheet({ visible, onDismiss, leadId, ownerId, isOrgan
       leadTransferService.request({
         leadId,
         toUserId: recipient!._id,
-        reason: reason.trim(),
+        reason: reason.trim() || undefined,
       }),
     onSuccess: ({ completed }) => {
       tapFeedback();
@@ -91,8 +107,20 @@ export function TransferLeadSheet({ visible, onDismiss, leadId, ownerId, isOrgan
     },
   });
 
-  const canSubmit =
-    !!recipient && reason.trim().length >= MIN_REASON && !transferMutation.isPending;
+  const canSubmit = !!recipient && !transferMutation.isPending;
+
+  // A suggestion is a toggle: tapping it again takes it back out, so a mis-tap
+  // costs nothing. Typed text around it is kept.
+  const parts = reason
+    .split(SEPARATOR)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const toggleSuggestion = (phrase: string) => {
+    const next = parts.includes(phrase)
+      ? parts.filter((part) => part !== phrase)
+      : [...parts, phrase];
+    setReason(next.join(SEPARATOR).slice(0, MAX_REASON));
+  };
 
   return (
     <BottomSheet visible={visible} onDismiss={onDismiss} maxHeightRatio={0.9}>
@@ -153,7 +181,25 @@ export function TransferLeadSheet({ visible, onDismiss, leadId, ownerId, isOrgan
         )}
       </ScrollView>
 
-      <Text style={styles.label}>{t('transfers.reason')}</Text>
+      <Text style={styles.label}>{t('transfers.sheet.reasonOptional')}</Text>
+      <View style={styles.chips}>
+        {REASON_SUGGESTIONS.map((key) => {
+          const phrase = t(`transfers.suggestions.${key}`);
+          const selected = parts.includes(phrase);
+          return (
+            <TouchableOpacity
+              key={key}
+              style={[styles.chip, selected && styles.chipSelected]}
+              onPress={() => toggleSuggestion(phrase)}
+              activeOpacity={0.75}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+            >
+              <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{phrase}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
       <TextInput
         value={reason}
         onChangeText={setReason}
@@ -228,13 +274,26 @@ const styles = StyleSheet.create({
   memberText: { flex: 1, minWidth: 0 },
   memberName: { fontSize: 15, fontWeight: '700', color: colors.text },
   memberRole: { fontSize: 12.5, color: colors.textSecondary, marginTop: 1 },
+  // Same chips as the Notes composer's canned replies, so the two read as one idea.
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.sm },
+  chip: {
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: colors.surface,
+  },
+  chipSelected: { backgroundColor: colors.primary },
+  chipText: { fontSize: 12, fontWeight: '600', color: colors.primary },
+  chipTextSelected: { color: '#FFFFFF' },
   reason: {
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: borderRadius.lg,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    minHeight: 76,
+    minHeight: 64,
     fontSize: 14.5,
     color: colors.text,
   },

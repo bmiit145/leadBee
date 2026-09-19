@@ -37,3 +37,5 @@ export { SegmentedToggle } from './SegmentedToggle';
 export { AnimatedChevrons } from './AnimatedChevrons';
 export { MembersPickerModal } from './MembersPickerModal';
 export { ListCard, ListRow, ListSectionTitle } from './ListRow';
+export { PopupMenu } from './PopupMenu';
+export type { PopupMenuItem } from './PopupMenu';

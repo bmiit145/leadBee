@@ -74,10 +74,12 @@ export function TransferCard({ transfer, viewerId, isOrganizer, onDecide, onOpen
         </View>
       </View>
 
-      <View style={styles.quote}>
-        <Text style={styles.quoteLabel}>{t('transfers.reason')}</Text>
-        <Text style={styles.quoteText}>{transfer.reason}</Text>
-      </View>
+      {transfer.reason ? (
+        <View style={styles.quote}>
+          <Text style={styles.quoteLabel}>{t('transfers.reason')}</Text>
+          <Text style={styles.quoteText}>{transfer.reason}</Text>
+        </View>
+      ) : null}
 
       {transfer.decisionNote ? (
         <View style={styles.quote}>

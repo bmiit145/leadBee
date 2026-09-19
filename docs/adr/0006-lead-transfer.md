@@ -42,8 +42,14 @@ do this through `/assign`, so the transfer path grants no new power.
 ### The record
 
 `LeadTransfer` (tenant-owned, `tenantPlugin`) is the permanent audit record:
-who asked, the reason (required, 3–500 characters), who decided, when, and
-their note. Every name is snapshotted, as `CallLog` does, so the history
+who asked, the reason, who decided, when, and their note.
+
+The reason is **optional** (up to 500 characters), as in standard CRM
+ownership transfer. A first version required it. We dropped that because a
+reason forced on every routine hand-off gets filled with "ok" rather than
+information. The app offers one-tap suggestions ("Going on leave", "Balancing
+workload", …), the same idea as the canned chips on Notes, so that giving a
+real reason costs one tap. Every name is snapshotted, as `CallLog` does, so the history
 still reads correctly after someone is renamed or leaves.
 
 Every transition is also written to the lead's Time Line
@@ -82,7 +88,7 @@ without the other.
 - A person who is not a party to a request gets **404, not 403**. Whether a
   colleague's lead is changing hands is not theirs to learn.
 - Before acceptance, the recipient sees only the lead number, the customer's
-  name and the reason. The phone number and the rest of the lead stay hidden
+  name and the reason, if one was given. The phone number and the rest of the lead stay hidden
   until the lead is theirs.
 - `GET /lead-transfers/recipients` lists active colleagues, showing only name,
   role and picture, to anyone with `leads.edit`. Agents have no `users.view`,

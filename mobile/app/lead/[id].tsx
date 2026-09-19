@@ -35,7 +35,7 @@ import {
   AnimatedChevrons,
   initialsOf,
 } from '../../src/components/ui';
-import type { HeaderAction, UnderlineTab } from '../../src/components/ui';
+import type { HeaderAction, PopupMenuItem, UnderlineTab } from '../../src/components/ui';
 import { useAuth } from '../../src/stores/auth.store';
 import { LeadStage } from '../../src/types';
 import { colors, spacing, borderRadius } from '../../src/theme';
@@ -219,18 +219,17 @@ export default function LeadDetailScreen() {
       { icon: 'people-outline', accessibilityLabel: 'Schedule meeting', onPress: () => router.push(`/meeting/create?leadId=${id}`) },
       { icon: 'clipboard-outline', accessibilityLabel: 'Create task', onPress: () => router.push(`/task/create?leadId=${id}`) },
     ];
-    if (canTransfer) {
-      actions.push({
-        icon: 'swap-horizontal-outline',
-        accessibilityLabel: t('transfers.action'),
-        onPress: () => setTransferOpen(true),
-      });
-    }
-    if (canEditLead) {
-      actions.push({ icon: 'create-outline', accessibilityLabel: 'Edit lead', onPress: () => router.push(`/lead/add?edit=${id}`) });
-    }
     return actions;
-  }, [id, canEditLead, canTransfer, router, lead, t]);
+  }, [id, router, lead]);
+
+  // Occasional actions sit behind ⋮, as in WhatsApp, so the bar keeps only the
+  // ones used on every visit and the title keeps its room.
+  const headerMenu = useMemo<PopupMenuItem[]>(() => {
+    const items: PopupMenuItem[] = [];
+    if (canTransfer) items.push({ label: t('transfers.action'), onPress: () => setTransferOpen(true) });
+    if (canEditLead) items.push({ label: t('leadHeader.edit'), onPress: () => router.push(`/lead/add?edit=${id}`) });
+    return items;
+  }, [id, canEditLead, canTransfer, router, t]);
 
   if (isLoading) {
     return (
@@ -289,7 +288,7 @@ export default function LeadDetailScreen() {
 
   return (
     <View style={styles.fill}>
-      <ScreenHeader title="Lead Details" actions={headerActions}>
+      <ScreenHeader title="Lead Details" actions={headerActions} menuItems={headerMenu}>
         {detailsOpen ? (
           // Room below the action buttons for the handle, so it never covers
           // — or takes taps from — the bottom of Bookmark, WhatsApp and Call.

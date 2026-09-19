@@ -1,9 +1,11 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTranslation } from 'react-i18next';
 import { colors, spacing } from '../../theme';
+import { PopupMenu, type PopupMenuItem } from './PopupMenu';
 
 export interface HeaderAction {
   icon: string;
@@ -17,6 +19,11 @@ interface Props {
   leading?: 'back' | 'menu' | 'none';
   onLeadingPress?: () => void;
   actions?: HeaderAction[];
+  /**
+   * Less-used actions, behind a ⋮ button at the end of the bar. Keeps the bar to
+   * the actions people reach for every time.
+   */
+  menuItems?: PopupMenuItem[];
   /** Rendered flush under the title inside the primary band (e.g. Reminder's tabs). */
   children?: React.ReactNode;
 }
@@ -33,10 +40,23 @@ export function ScreenHeader({
   leading = 'back',
   onLeadingPress,
   actions = [],
+  menuItems = [],
   children,
 }: Props) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { t } = useTranslation();
+  const menuButton = useRef<View>(null);
+  const [menuAnchor, setMenuAnchor] = useState<{ top: number; right: number } | null>(null);
+
+  // Measured on each open, so the menu lands on the button wherever the bar is.
+  const openMenu = () => {
+    menuButton.current?.measureInWindow((x, y, width) => {
+      setMenuAnchor({ top: y + 4, right: Math.max(8, Dimensions.get('window').width - (x + width) + 4) });
+    });
+  };
+
+  const hasTrailing = actions.length > 0 || menuItems.length > 0;
 
   const leadingIcon = leading === 'menu' ? 'menu' : 'chevron-back';
   const handleLeading = onLeadingPress ?? (() => router.back());
@@ -60,7 +80,7 @@ export function ScreenHeader({
         <Text style={styles.title} numberOfLines={1}>{title}</Text>
 
         {/* Keeps the title optically centred when there are no actions. */}
-        {actions.length === 0 ? (
+        {!hasTrailing ? (
           <View style={styles.btn} />
         ) : (
           <View style={styles.actions}>
@@ -75,11 +95,31 @@ export function ScreenHeader({
                 <Ionicons name={a.icon as any} size={23} color="#FFFFFF" />
               </TouchableOpacity>
             ))}
+            {menuItems.length > 0 ? (
+              <TouchableOpacity
+                ref={menuButton}
+                style={styles.btn}
+                onPress={openMenu}
+                accessibilityRole="button"
+                accessibilityLabel={t('common.moreOptions')}
+              >
+                <Ionicons name="ellipsis-vertical" size={21} color="#FFFFFF" />
+              </TouchableOpacity>
+            ) : null}
           </View>
         )}
       </View>
 
       {children}
+
+      {menuAnchor ? (
+        <PopupMenu
+          visible
+          onDismiss={() => setMenuAnchor(null)}
+          items={menuItems}
+          anchor={menuAnchor}
+        />
+      ) : null}
     </View>
   );
 }

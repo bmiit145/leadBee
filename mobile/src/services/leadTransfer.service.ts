@@ -45,7 +45,7 @@ export const leadTransferService = {
   async request(data: {
     leadId: string;
     toUserId: string;
-    reason: string;
+    reason?: string;
   }): Promise<{ transfer: LeadTransfer; completed: boolean }> {
     const res = await api.post<ApiResponse<{ transfer: LeadTransfer; completed: boolean }>>(
       '/lead-transfers',

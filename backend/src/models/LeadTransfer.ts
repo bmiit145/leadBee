@@ -49,7 +49,8 @@ export interface ILeadTransfer extends Document {
   /** The owner, or an organizer acting for them. */
   requestedBy: mongoose.Types.ObjectId;
   requestedByName: string;
-  reason: string;
+  /** Optional: a hand-off between colleagues often needs no explanation. */
+  reason?: string;
   status: LeadTransferStatus;
   decidedBy?: mongoose.Types.ObjectId;
   decidedByName?: string;
@@ -73,7 +74,7 @@ const leadTransferSchema = new Schema<ILeadTransfer>(
     toUserName: { type: String, required: true, trim: true },
     requestedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     requestedByName: { type: String, required: true, trim: true },
-    reason: { type: String, required: true, trim: true, maxlength: 500 },
+    reason: { type: String, trim: true, maxlength: 500 },
     status: {
       type: String,
       enum: LEAD_TRANSFER_STATUS_ORDER,

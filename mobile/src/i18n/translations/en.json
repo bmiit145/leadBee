@@ -12,6 +12,8 @@
     "tryAgain": "Try Again",
     "checking": "Checking...",
     "ok": "OK",
+    "moreOptions": "More options",
+    "closeMenu": "Close menu",
     "appName": "Property Management System"
   },
   "language": {
@@ -149,7 +151,8 @@
   },
   "leadHeader": {
     "hide": "Hide lead details",
-    "show": "Show lead details"
+    "show": "Show lead details",
+    "edit": "Edit lead"
   },
   "duplicates": {
     "title": "Lead already exists",
@@ -689,10 +692,19 @@
       "recipient": "Transfer to",
       "searchPlaceholder": "Search colleagues",
       "noRecipients": "No colleagues found",
-      "reasonPlaceholder": "Why is this lead moving? e.g. Customer is closer to their site",
-      "reasonHint": "At least 3 characters. Your colleague sees this.",
+      "reasonOptional": "Reason (optional)",
+      "reasonPlaceholder": "Add a note for your colleague",
+      "reasonHint": "Tap a suggestion or type your own. Your colleague sees this.",
       "submitOwner": "Send request",
       "submitOrganizer": "Transfer now"
+    },
+    "suggestions": {
+      "onLeave": "Going on leave",
+      "area": "Customer is in their area",
+      "workload": "Balancing workload",
+      "customerAsked": "Customer asked for them",
+      "language": "Speaks the customer's language",
+      "expertise": "Better fit for this requirement"
     },
     "sentToast": "Transfer request sent to {{name}}",
     "doneToast": "Lead transferred to {{name}}",

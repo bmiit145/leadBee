@@ -68,7 +68,7 @@ export const leadTransferService = {
    * "transferred" or "request sent" without re-deriving the rule.
    */
   async request(
-    input: { leadId: string; toUserId: string; reason: string },
+    input: { leadId: string; toUserId: string; reason?: string },
     viewer: Viewer
   ): Promise<{ transfer: TransferView; completed: boolean }> {
     const lead = await findVisibleLead(input.leadId, viewer);
@@ -100,7 +100,7 @@ export const leadTransferService = {
         toUserName: recipient.name,
         requestedBy: viewer.userId,
         requestedByName: viewer.name,
-        reason: input.reason,
+        ...(input.reason ? { reason: input.reason } : {}),
         status: 'pending',
         expiresAt: expiryFrom(now),
       });
