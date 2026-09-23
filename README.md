@@ -17,24 +17,33 @@ transactions need an oplog, and organization provisioning uses one).
 # 1. MongoDB, as a single-node replica set
 mongod --dbpath <dir> --replSet rs0 --bind_ip 127.0.0.1
 
-# 2. API
+# 2. Backend + dashboard install once, from the workspace root
+pnpm install
+
+# 3. API
 cd backend
 cp .env.example .env          # then set real secrets
-npm install
-npm run init-rs               # one-time: initiates rs0
-npm run seed                  # platform owner + a demo tenant
-npm run dev                   # http://localhost:4000/docs
+pnpm init-rs                  # one-time: initiates rs0
+pnpm seed                     # platform owner + a demo tenant
+pnpm dev                      # http://localhost:4000/docs
 
-# 3. Control plane
+# 4. Control plane
 cd ../dashboard
-npm install
-npm run dev                   # http://localhost:5173
+pnpm dev                      # http://localhost:5173
 
-# 4. Mobile
+# 5. Mobile — its own install root, and npm
 cd ../mobile
 npm install
 npx expo start
 ```
+
+**One lockfile per install root.** `backend/` and `dashboard/` are pnpm
+workspace members and are installed *only* from the repository root — running
+`npm install` inside either one recreates a competing lockfile, and two
+lockfiles let a cached CI install drift from the one that was committed.
+`pnpm@10.28.0` is pinned in `package.json#packageManager` so every machine and
+every build resolves identically. `mobile/` is deliberately outside the
+workspace and keeps its own install.
 
 ### Seeded credentials (development only)
 
@@ -51,11 +60,11 @@ The seed refuses to create the demo tenant when `NODE_ENV=production`.
 
 ```bash
 cd backend
-npm run routes    # builds the app, prints all 95 route entries — no database needed
-npm run smoke     # 52 assertions end-to-end against a live database
+pnpm routes    # builds the app, prints all 95 route entries — no database needed
+pnpm smoke     # 52 assertions end-to-end against a live database
 ```
 
-`npm run smoke` is the one that matters. It drives real requests through the
+`pnpm smoke` is the one that matters. It drives real requests through the
 full Fastify lifecycle and asserts, among other things, that a tenant holding a
 valid token and the exact id of another tenant's lead cannot read, update or
 delete it.

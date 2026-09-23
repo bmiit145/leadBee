@@ -67,10 +67,22 @@ All three are checked rather than trusted:
 ### Build and run
 
 ```bash
-npm ci
-npm run build          # tsc -> dist/
-npm start              # node dist/server.js
+pnpm install --frozen-lockfile   # from the REPOSITORY ROOT, not backend/
+pnpm --filter @leadbee/backend build
+pnpm --filter @leadbee/backend start
 ```
+
+`backend/` is a pnpm workspace member, so it has no lockfile of its own and
+must be installed from the root. `pnpm@10.28.0` is pinned in
+`package.json#packageManager`; a host that picks its own pnpm version can
+resolve a different tree from the committed lockfile.
+
+Do not deploy this to a serverless platform. It is a long-running process:
+`server.ts` calls `app.listen()` and registers a graceful-shutdown hook, and
+the connection pool, tenant `AsyncLocalStorage` scope, rate-limit store and
+load shedder all assume a process that outlives a single request. A serverless
+build will go green and then serve nothing, because there is no function
+entrypoint.
 
 `PORT` and `HOST` come from the environment; the host's injected `PORT` is
 honoured. `trustProxy` is already on, so client IPs and protocol survive the
@@ -130,7 +142,7 @@ This is a monorepo, so the project must be scoped to the subdirectory:
 | --- | --- |
 | Root Directory | `dashboard` |
 | Framework Preset | Vite |
-| Build Command | `npm run build` (from `vercel.json`) |
+| Build Command | `pnpm build` (from `vercel.json`) |
 | Output Directory | `dist` (from `vercel.json`) |
 
 `dashboard/vercel.json` covers the rest: the SPA fallback so deep links like

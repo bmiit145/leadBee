@@ -3,16 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "description": "LeadBee — multi-tenant SaaS lead management platform",
-  "workspaces": [
-    "backend",
-    "dashboard"
-  ],
+  "packageManager": "pnpm@10.28.0",
   "scripts": {
-    "dev:api": "npm run dev --workspace backend",
-    "dev:dashboard": "npm run dev --workspace dashboard",
-    "build": "npm run build --workspace backend && npm run build --workspace dashboard",
-    "typecheck": "npm run typecheck --workspace backend && npm run typecheck --workspace dashboard",
-    "seed": "npm run seed --workspace backend"
+    "dev:api": "pnpm --filter @leadbee/backend dev",
+    "dev:dashboard": "pnpm --filter @leadbee/dashboard dev",
+    "build": "pnpm --filter @leadbee/backend build && pnpm --filter @leadbee/dashboard build",
+    "typecheck": "pnpm --filter @leadbee/backend typecheck && pnpm --filter @leadbee/dashboard typecheck",
+    "seed": "pnpm --filter @leadbee/backend seed"
   },
   "engines": {
     "node": ">=20.11.0"
