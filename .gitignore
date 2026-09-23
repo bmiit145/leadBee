@@ -38,3 +38,4 @@ dashboard/.vite/
 
 # Local device captures and visual-design references
 .design-references/
+.vercel

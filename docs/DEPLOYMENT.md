@@ -114,14 +114,110 @@ Production-specific notes:
 - `CORS_ORIGINS` — every dashboard origin, comma-separated, absolute `https`,
   no trailing slash. The mobile app needs no entry: native requests send no
   `Origin` header.
-- `PLATFORM_BOOTSTRAP_*` — used only by `npm run seed`. Unset them after the
+- `PLATFORM_BOOTSTRAP_*` — used only by the seed script. Unset them after the
   first platform admin exists.
+- `HOST=127.0.0.1` when a reverse proxy sits in front, so the API is not also
+  reachable directly on the VPS's public interface. The `.env.example` default
+  of `0.0.0.0` suits a platform that does its own routing, not a box you own.
+
+### Running on a VPS
+
+A VPS is the natural home for this service — a long-running process under an
+init system is precisely what it is built for, and every serverless caveat
+above simply stops applying.
+
+**Sizing.** 2 vCPU / 2 GB is enough for the API alone. Put MongoDB on the same
+box and you want 4 GB, because the WiredTiger cache will happily take half of
+whatever it finds.
+
+**MongoDB.** Managed Atlas is still the easier answer, because the replica set
+is handled for you. Self-hosting on the same VPS works, but the replica set is
+not optional — add to `/etc/mongod.conf`:
+
+```yaml
+replication:
+  replSetName: rs0
+net:
+  bindIp: 127.0.0.1        # never the public interface
+```
+
+then initiate it once with `pnpm --filter @leadbee/backend init-rs`.
+
+**Process supervision.** systemd, with no extra dependency to install:
+
+```ini
+# /etc/systemd/system/leadbee-api.service
+[Unit]
+Description=LeadBee API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=leadbee
+WorkingDirectory=/srv/leadbee/backend
+EnvironmentFile=/srv/leadbee/backend/.env
+ExecStart=/usr/bin/node dist/server.js
+Restart=always
+RestartSec=5
+
+# server.ts shuts down through close-with-grace, which allows itself 10s to
+# drain. Killing at the systemd default would cut that short.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/leadbee
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**TLS and the reverse proxy.** Caddy is the least work, since it obtains and
+renews certificates on its own:
+
+```caddy
+api.example.com {
+    reverse_proxy 127.0.0.1:4000
+}
+```
+
+Caddy sets `X-Forwarded-For` and `X-Forwarded-Proto`, and the app already runs
+with `trustProxy: true`, so client IPs survive — which matters, because the
+rate limiter falls back to IP for unauthenticated requests. Behind a proxy that
+does *not* set those headers, every caller looks like `127.0.0.1` and shares one
+rate-limit bucket.
+
+**Deploying a new version.**
+
+```bash
+cd /srv/leadbee && git pull
+pnpm install --frozen-lockfile              # repository root
+pnpm --filter @leadbee/backend build
+sudo systemctl restart leadbee-api
+curl -fsS localhost:4000/api/v1/health/ready
+```
+
+**What a VPS fixes for free.** One persistent process means the fire-and-forget
+writes in `notification.service.ts` and `lead.service.ts` actually complete, the
+in-memory rate limiter is genuinely global, one connection pool serves the whole
+instance, and `closeWithGrace` drains in-flight requests on restart. Those are
+the four things serverless breaks.
+
+**What it does not fix.** You now own patching, backups and uptime. Take
+`mongodump` backups on a schedule and test a restore — a VPS has no equivalent
+of Atlas's point-in-time recovery unless you build one. And the rate limiter is
+still per *process*: the moment you run two API instances behind a load
+balancer, move it to the Redis store.
 
 ### After the first deploy
 
 ```bash
-npm run seed           # platform owner only; refuses the demo tenant when NODE_ENV=production
-npm run sync-indexes
+pnpm --filter @leadbee/backend seed          # platform owner only; refuses the demo tenant when NODE_ENV=production
+pnpm --filter @leadbee/backend sync-indexes
 ```
 
 ### Known limit
