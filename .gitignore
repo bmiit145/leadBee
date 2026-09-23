@@ -26,6 +26,11 @@ dashboard/dist/
 dashboard/.vite/
 *.tsbuildinfo
 
+# Vercel CLI. `vercel pull` writes the project's real environment values into
+# .vercel/.env.*.local, and `vercel build` writes the deployable output here.
+.vercel/
+.vercel/output/
+
 # Local MongoDB data + logs (created by the single-node replica set used in dev)
 .data/
 # Added by code-review-graph

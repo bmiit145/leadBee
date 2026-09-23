@@ -163,6 +163,38 @@ Set `VITE_API_ORIGIN` **per Vercel environment**:
 requires a **redeploy**, not just a restart. There is nothing secret here — the
 bundle is public.
 
+### Reproducing the Vercel build locally
+
+`pnpm build` proves the code compiles, but it uses *your* shell's environment
+and ignores `vercel.json`. To exercise what Vercel will actually run — the same
+env values, the same build command, the same output layout — build with the
+Vercel CLI instead:
+
+```bash
+cd dashboard
+npx vercel login                          # once, interactive
+npx vercel link                           # once — pick the dashboard project
+
+npx vercel pull --environment=production  # fetch that env's real variables
+npx vercel build --prod                   # build exactly as Vercel would
+```
+
+`vercel pull` writes the environment into `.vercel/.env.production.local`, and
+`vercel build` emits `.vercel/output/`. Both are gitignored. Swap
+`--environment=preview` and drop `--prod` to rehearse a preview deploy against
+the staging API.
+
+This is the step that catches a missing `VITE_API_ORIGIN` *before* it reaches
+production, because it builds with the variables the environment really has
+rather than the ones you happen to have exported.
+
+To ship the artifact you just verified, rather than rebuilding on their
+machine:
+
+```bash
+npx vercel deploy --prebuilt --prod
+```
+
 ### Why there is no `/api` rewrite
 
 A `vercel.json` rewrite proxying `/api` to the backend would keep the dashboard
