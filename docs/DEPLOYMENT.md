@@ -187,11 +187,31 @@ to track per-commit URLs.
 `mobile/eas.json` defines three profiles, each bound to the EAS environment of
 the same name and to an update channel:
 
-| Profile | Distribution | Channel | EAS environment |
-| --- | --- | --- | --- |
-| `development` | internal, dev client | `development` | development |
-| `preview` | internal | `preview` | preview |
-| `production` | store | `production` | production |
+| Profile | Artifact | Distribution | Channel | EAS environment |
+| --- | --- | --- | --- | --- |
+| `development` | apk, dev client | internal | `development` | development |
+| `preview` | apk | internal | `preview` | preview |
+| `production` | **aab** | store | `production` | production |
+| `production-apk` | **apk** | internal | `production` | production |
+
+`production-apk` exists because Google Play requires an **app bundle** for new
+apps and will reject an APK, while an APK is the only thing you can hand
+someone to install directly. It `extends` `production`, so it is a real
+production build in every other respect — same production API, same
+`production` update channel, same signing key — and differs only in the
+artifact it emits and in being distributed by EAS link rather than prepared for
+the store. Use it for client demos, device QA of the production configuration,
+and anywhere Play is not the delivery route.
+
+`autoIncrement` is inherited rather than switched off, so each APK gets a higher
+`versionCode` than the last and installs over the previous one. That shares one
+counter with the store profile, which only leaves gaps in the sequence — Play
+requires each upload to be higher than the last, not consecutive.
+
+One caveat when both routes are live: Play App Signing re-signs the uploaded
+bundle, so a Play install and a sideloaded `production-apk` are signed
+differently and Android will not upgrade one into the other. Testers switching
+between them have to uninstall first.
 
 `appVersionSource: "remote"` means EAS owns the build number and the
 `production` profile auto-increments it. Do not bump it by hand in `app.json`.
@@ -224,10 +244,17 @@ no EAS variable.
 ### Build and submit
 
 ```bash
-eas build --profile preview    --platform all      # internal QA
-eas build --profile production --platform all
+eas build --profile preview    --platform all         # internal QA
+
+eas build --profile production --platform all         # store: aab + ipa
 eas submit --profile production --platform all
+
+eas build --profile production-apk --platform android # installable .apk
 ```
+
+`production-apk` is Android-only by design. Passing `--platform all` to it
+still produces an iOS build, but `buildType` does not apply there and iOS
+cannot be sideloaded this way, so name the platform explicitly.
 
 ### Updates: OTA or a new build?
 
