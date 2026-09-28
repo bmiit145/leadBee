@@ -289,6 +289,26 @@ Order of attention: tenant isolation → authorisation → data correctness →
 failure handling → clarity → style. Formatting is a tool's job, not a
 reviewer's.
 
+### ENG-32 — User-facing actions work end to end · MUST · Target
+
+Every visible control that promises an action must be connected through the
+complete user flow: entry point, handler, navigation, service/API, server-side
+authorization where applicable, state changes, and the resulting user-visible
+outcome. It must provide appropriate loading, success and error feedback, or be
+explicitly and accessibly disabled with a reason. A placeholder handler,
+dead-end route, unhandled result, or stale "not implemented" comment alongside
+working functionality is a defect.
+
+Before marking a feature complete, inspect the full path from the triggering
+control through its outcome, reuse the established route and service layers,
+and verify relevant coverage under `ENG-18`–`ENG-21`. State clearly whether
+verification was source inspection, automated testing or runtime testing.
+
+**Why.** A polished screen is not a working feature if the button that should
+open it does nothing. The Join Organization action in the organization
+switcher was a concrete instance: the screen and API service existed while the
+visible action remained a no-op.
+
 ---
 
 ## 11. Tooling gaps

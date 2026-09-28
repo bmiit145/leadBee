@@ -234,8 +234,7 @@ function OrganizationSwitcherSheet({
         icon="enter-outline"
         label={t('organizations.join')}
         disabled={pendingId !== null}
-        // Wired when "join an organization" is built (KNOWN-GAPS 6.2).
-        onPress={() => undefined}
+        onPress={() => navigate('/organization/join')}
       />
       <ActionRow
         icon="settings-outline"

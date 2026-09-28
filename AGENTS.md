@@ -1,4 +1,34 @@
 <!-- code-review-graph MCP tools -->
+## Binding engineering standards
+
+Before changing or reviewing code, read `docs/standards/README.md` and the
+standards that apply to the affected surface (`ARCHITECTURE-RULES.md`,
+`ENGINEERING-STANDARDS.md`, `CONFIGURATION-AND-PLANS.md`, and the relevant
+surface `RULES.md`). These are binding requirements, not optional suggestions.
+Follow every applicable **MUST** rule; where a rule is marked **Target**, new
+and changed code must meet it. Do not claim existing behavior is compliant
+without checking its implementation. If a requirement conflicts with the task,
+identify the exact rule and explain the concrete conflict; do not silently
+skip it. Any exception must follow the documented exception process.
+
+## End-to-end feature completeness
+
+- Trace the user's entry point through the action, navigation, service/API,
+  authorization and final user-visible outcome before declaring a feature done.
+- Every visible control that promises an action must perform that action, show
+  appropriate loading/success/error states, or be explicitly and accessibly
+  disabled with its reason. No placeholder no-ops, dead buttons, or stale
+  comments claiming functionality is unbuilt when it already exists.
+- Reuse established routes, services, shared clients, permissions and design
+  patterns. Do not create a parallel path that bypasses them.
+- Check relevant tests and add/update coverage required by `ENG-18` onward.
+  Report verification accurately; never imply runtime behavior was tested when
+  only source inspection was done.
+
+These requirements apply to every agent and tool working in this repository,
+including implementation, review, refactoring and documentation tasks.
+
+<!-- code-review-graph MCP tools -->
 ## MCP Tools: code-review-graph
 
 **This project has a knowledge graph. Start with the code-review-graph
