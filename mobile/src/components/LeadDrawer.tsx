@@ -23,6 +23,7 @@ import { toTitleCase } from '../utils/format';
 import { useQuery } from '@tanstack/react-query';
 import { queryKeys } from '../lib/queryKeys';
 import { leadTransferService } from '../services/leadTransfer.service';
+import { inviteService } from '../services/invite.service';
 
 const DRAWER_WIDTH = Dimensions.get('window').width * 0.78;
 
@@ -52,7 +53,15 @@ type MenuEntry =
       /** `badge` counts what is waiting on the viewer behind that item. */
       items: { label: string; onPress: () => void; badge?: number }[];
     }
-  | { kind: 'link'; label: string; icon: IconName; onPress: () => void; tone?: 'danger' }
+  | {
+      kind: 'link';
+      label: string;
+      icon: IconName;
+      onPress: () => void;
+      tone?: 'danger';
+      /** What is waiting on the viewer behind that row. */
+      badge?: number;
+    }
   | { kind: 'soon'; label: string; icon: IconName }
   | { kind: 'divider'; key: string };
 
@@ -74,6 +83,13 @@ export function LeadDrawer({ visible, onClose }: Props) {
     queryKey: queryKeys.transfers.pendingCount,
     queryFn: leadTransferService.pendingCount,
     enabled: visible && canTransfer,
+  });
+
+  const canManageMembers = hasPermission('users.manage');
+  const joinRequestsWaiting = useQuery({
+    queryKey: queryKeys.invites.pendingCount,
+    queryFn: inviteService.pendingCounts,
+    enabled: visible && canManageMembers,
   });
 
   /**
@@ -175,6 +191,18 @@ export function LeadDrawer({ visible, onClose }: Props) {
     { kind: 'link', label: t('drawer.notifications'), icon: 'notifications-outline', onPress: () => nav('/notifications') },
     { kind: 'soon', label: 'Announcement', icon: 'megaphone-outline' },
     { kind: 'soon', label: 'Attendance', icon: 'calendar-outline' },
+    // Growing the team, for whoever may manage people.
+    ...(canManageMembers
+      ? ([
+          {
+            kind: 'link',
+            label: t('invites.title'),
+            icon: 'person-add-outline',
+            onPress: () => nav('/organization/invite'),
+            badge: joinRequestsWaiting.data?.requests,
+          },
+        ] as MenuEntry[])
+      : []),
     // Account
     { kind: 'divider', key: 'account' },
     { kind: 'link', label: t('profile.title'), icon: 'person-circle-outline', onPress: () => nav('/(leads)/profile') },
@@ -257,6 +285,11 @@ export function LeadDrawer({ visible, onClose }: Props) {
                     <Ionicons name={entry.icon} size={20} color={danger ? colors.error : colors.primary} />
                   </View>
                   <Text style={[styles.sectionLabel, danger && { color: colors.error }]}>{entry.label}</Text>
+                  {entry.badge ? (
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>{entry.badge > 99 ? '99+' : entry.badge}</Text>
+                    </View>
+                  ) : null}
                 </TouchableOpacity>
               );
             }

@@ -4,6 +4,7 @@ import { Account, User } from '../types';
 import { authService } from '../services/auth.service';
 import { onboardingService } from '../services/onboarding.service';
 import { organizationsService } from '../services/organizations.service';
+import { joinService, type JoinResult } from '../services/invite.service';
 import { queryClient } from '../lib/queryClient';
 import { storage, type SessionKind } from '../utils/storage';
 import { systemService, ServerStatus } from '../services/system.service';
@@ -68,6 +69,13 @@ interface AuthContextType {
    * Afterwards `isAuthenticated` is true.
    */
   createOrganization: (details: { organizationName: string; slug?: string }) => Promise<void>;
+  /**
+   * Uses an invite code. Answers `joined` (this device is now in that
+   * organization) or `requested` (an admin has to let them in).
+   */
+  joinOrganization: (code: string, message?: string) => Promise<JoinResult>;
+  /** Accepts an invitation addressed to this person's email and opens it. */
+  acceptInvitation: (token: string) => Promise<void>;
   /**
    * Moves this device into another organization the person belongs to. Clears
    * everything cached for the one being left. Rejects with the API's error.
@@ -280,6 +288,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [adoptMembershipSession]
   );
 
+  /**
+   * Uses an invite code. Either the person is in — and this device moves into
+   * the organization, exactly as creating one does — or their request is queued
+   * and the account session carries on.
+   */
+  const joinOrganization = useCallback(
+    async (code: string, message?: string) => {
+      const result = await joinService.join(code, message);
+      if (result.status === 'joined') await adoptMembershipSession(result);
+      return result;
+    },
+    [adoptMembershipSession]
+  );
+
+  /** Accepts an invitation sent to this person's email, and opens it. */
+  const acceptInvitation = useCallback(
+    async (token: string) => {
+      const result = await joinService.accept(token);
+      if (result.status === 'joined') await adoptMembershipSession(result);
+    },
+    [adoptMembershipSession]
+  );
+
   const switchOrganization = useCallback(
     async (organizationId: string, organizationName: string) => {
       setOrganizationTransition(organizationName);
@@ -439,6 +470,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     reloadSession,
     reloadAccount,
     createOrganization,
+    joinOrganization,
+    acceptInvitation,
     switchOrganization,
     organizationTransition,
     checkServerHealth,

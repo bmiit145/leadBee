@@ -15,6 +15,9 @@ import { Meeting } from '../models/Meeting.js';
 import { CallLog } from '../models/CallLog.js';
 import { LeadThreadItem } from '../models/LeadThreadItem.js';
 import { LeadTransfer } from '../models/LeadTransfer.js';
+import { JoinCode } from '../models/JoinCode.js';
+import { JoinRequest } from '../models/JoinRequest.js';
+import { OrganizationInvite } from '../models/OrganizationInvite.js';
 import { LEAD_STAGE_ORDER } from '../config/constants.js';
 import { withoutTenantScope } from '../lib/tenantContext.js';
 import { isValidMobilePhone } from '../lib/phone.js';
@@ -1277,6 +1280,320 @@ async function main(): Promise<void> {
     [acceptOvertaken.json(), overtakenRow]
   );
 
+  // ─── Joining an organization ────────────────────────────────────────────────
+  section('Joining an organization');
+
+  // Registration is rate-limited per IP, and this section registers several
+  // people; a random forwarded address keeps a smoke run inside the real limit.
+  const joinOctet = () => Math.floor(Math.random() * 254) + 1;
+  const joinHeaders = {
+    'x-forwarded-for': `10.${joinOctet()}.${joinOctet()}.${joinOctet()}`,
+  };
+  const joinerEmails: string[] = [];
+  const issuedCodes: string[] = [];
+  const acmeOrgId = login.json()?.data?.organization?._id as string | undefined;
+
+  /** Registers, confirms and signs in a person who belongs to no organization. */
+  const newcomer = async (tag: string) => {
+    const email = `join-${tag}-${Date.now()}@smoke.test`;
+    joinerEmails.push(email);
+    const details = {
+      firstName: 'Join',
+      lastName: tag,
+      email,
+      phone: smokeMobile('6', Date.now() + joinerEmails.length * 7),
+      password: 'Password@123',
+      acceptedTerms: true,
+    };
+    const registered = await app.inject({
+      method: 'POST',
+      url: '/api/v1/accounts/register',
+      headers: joinHeaders,
+      payload: details,
+    });
+    const receipt = registered.json()?.data;
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/accounts/verify-email',
+      headers: joinHeaders,
+      payload: {
+        email,
+        code: receipt?.devCode,
+        registrationToken: receipt?.registrationToken,
+      },
+    });
+    const signedIn = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      headers: joinHeaders,
+      payload: { identifier: email, password: details.password },
+    });
+    return {
+      email,
+      auth: { authorization: `Bearer ${signedIn.json()?.data?.accessToken}` },
+      session: signedIn.json()?.data,
+    };
+  };
+
+  const CODE_SHAPE = /^[A-Z0-9]{4}-[A-Z0-9]{4}$/;
+  const rawCode = (formatted: string) => formatted.replace('-', '');
+
+  const agentLink = await inject('GET', '/api/v1/invites/link', agentAuth);
+  check('An agent cannot see the invite link', agentLink.statusCode === 403, agentLink.statusCode);
+
+  const noLinkYet = await inject('GET', '/api/v1/invites/link', ownerAuth);
+  check(
+    'The invite link reads as absent until one is issued',
+    noLinkYet.statusCode === 200 && 'link' in (noLinkYet.json()?.data ?? {}),
+    noLinkYet.json()
+  );
+
+  const firstLink = await inject('POST', '/api/v1/invites/link', ownerAuth, {});
+  const firstCode = firstLink.json()?.data?.link?.code as string;
+  if (firstCode) issuedCodes.push(rawCode(firstCode));
+  check(
+    'An invite link is issued, needing approval by default',
+    firstLink.statusCode === 201 &&
+      CODE_SHAPE.test(firstCode) &&
+      firstLink.json()?.data?.link?.requiresApproval === true &&
+      firstLink.json()?.data?.link?.role === 'user',
+    firstLink.json()
+  );
+
+  const organizerRoleLink = await inject('PATCH', '/api/v1/invites/link', ownerAuth, {
+    role: 'admin',
+  });
+  check(
+    'An invite link cannot hand out an organizer role',
+    organizerRoleLink.statusCode === 422 || organizerRoleLink.statusCode === 400,
+    organizerRoleLink.statusCode
+  );
+
+  const reissued = await inject('POST', '/api/v1/invites/link', ownerAuth, {});
+  const liveCode = reissued.json()?.data?.link?.code as string;
+  if (liveCode) issuedCodes.push(rawCode(liveCode));
+  const asha = await newcomer('asha');
+  const oldCodePreview = await inject(
+    'GET',
+    `/api/v1/join/preview?code=${encodeURIComponent(firstCode)}`,
+    asha.auth
+  );
+  check(
+    'Resetting the link retires the old code everywhere',
+    liveCode !== firstCode &&
+      oldCodePreview.statusCode === 404 &&
+      oldCodePreview.json()?.error?.code === 'INVITE_INVALID',
+    [liveCode, oldCodePreview.json()]
+  );
+
+  const pastedLink = `https://leadbee.app/join/${liveCode.toLowerCase()}`;
+  const preview = await inject(
+    'GET',
+    `/api/v1/join/preview?code=${encodeURIComponent(pastedLink)}`,
+    asha.auth
+  );
+  check(
+    'A pasted invite link previews the organization without joining it',
+    preview.statusCode === 200 &&
+      typeof preview.json()?.data?.organizationName === 'string' &&
+      preview.json()?.data?.requiresApproval === true &&
+      preview.json()?.data?.alreadyMember === false,
+    preview.json()
+  );
+
+  const nonsense = await inject('GET', '/api/v1/join/preview?code=AAAA-AAAA', asha.auth);
+  check(
+    'An unknown code says only that it is not valid',
+    nonsense.statusCode === 404 && nonsense.json()?.error?.code === 'INVITE_INVALID',
+    nonsense.json()
+  );
+
+  const joinRequested = await inject('POST', '/api/v1/join', asha.auth, {
+    code: liveCode,
+    message: 'Smoke: field team',
+  });
+  check(
+    'A code that needs approval raises a request instead of joining',
+    joinRequested.statusCode === 202 && joinRequested.json()?.data?.status === 'requested',
+    joinRequested.json()
+  );
+
+  const requestedTwice = await inject('POST', '/api/v1/join', asha.auth, { code: liveCode });
+  check(
+    'Asking twice does not queue twice',
+    requestedTwice.statusCode === 409 &&
+      requestedTwice.json()?.error?.code === 'JOIN_REQUEST_PENDING',
+    requestedTwice.json()
+  );
+
+  const queue = await inject('GET', '/api/v1/invites/requests?status=pending', ownerAuth);
+  const pendingCounts = await inject('GET', '/api/v1/invites/pending-count', ownerAuth);
+  const ashaRequest = (queue.json()?.data ?? []).find(
+    (row: { email: string }) => row.email === asha.email
+  );
+  check(
+    'The request is in the admin’s queue, with who is asking',
+    Boolean(ashaRequest) &&
+      ashaRequest.message === 'Smoke: field team' &&
+      (pendingCounts.json()?.data?.requests ?? 0) >= 1,
+    [queue.json()?.total, pendingCounts.json()?.data]
+  );
+
+  const agentApprove = await inject(
+    'POST',
+    `/api/v1/invites/requests/${ashaRequest?._id}/approve`,
+    agentAuth,
+    {}
+  );
+  check(
+    'An agent cannot approve a request to join',
+    agentApprove.statusCode === 403,
+    agentApprove.statusCode
+  );
+
+  const approved = await inject(
+    'POST',
+    `/api/v1/invites/requests/${ashaRequest?._id}/approve`,
+    ownerAuth,
+    {}
+  );
+  const ashaMe = await inject('GET', '/api/v1/accounts/me', asha.auth);
+  check(
+    'Approving a request creates the membership',
+    approved.statusCode === 200 &&
+      approved.json()?.data?.status === 'approved' &&
+      ashaMe.json()?.data?.organizationCount === 1,
+    [approved.json(), ashaMe.json()?.data]
+  );
+
+  const approvedTwice = await inject(
+    'POST',
+    `/api/v1/invites/requests/${ashaRequest?._id}/approve`,
+    ownerAuth,
+    {}
+  );
+  check(
+    'A request cannot be answered twice',
+    approvedTwice.statusCode === 409 &&
+      approvedTwice.json()?.error?.code === 'JOIN_REQUEST_NOT_PENDING',
+    approvedTwice.json()
+  );
+
+  await inject('PATCH', '/api/v1/invites/link', ownerAuth, { requiresApproval: false });
+  const bhavna = await newcomer('bhavna');
+  const joinedOutright = await inject('POST', '/api/v1/join', bhavna.auth, { code: liveCode });
+  const joinedSession = joinedOutright.json()?.data;
+  const joinedAuth = { authorization: `Bearer ${joinedSession?.accessToken}` };
+  const joinedLeads = await inject('GET', '/api/v1/leads?limit=1', joinedAuth);
+  check(
+    'With approval off, a code joins straight away and answers with a working session',
+    joinedOutright.statusCode === 200 &&
+      joinedSession?.session === 'tenant' &&
+      joinedSession?.user?.role === 'user' &&
+      joinedLeads.statusCode === 200,
+    [joinedOutright.statusCode, joinedSession?.session, joinedLeads.statusCode]
+  );
+
+  const joinedAgain = await inject('POST', '/api/v1/join', bhavna.auth, { code: liveCode });
+  check(
+    'Someone already inside cannot join the same organization twice',
+    joinedAgain.statusCode === 401 || joinedAgain.statusCode === 409,
+    joinedAgain.statusCode
+  );
+
+  // ─── Invitations by email ───────────────────────────────────────────────────
+  const chetan = await newcomer('chetan');
+  const invited = await inject('POST', '/api/v1/invites', ownerAuth, {
+    email: chetan.email,
+    message: 'Smoke: welcome aboard',
+  });
+  const inviteToken = invited.json()?.data?.token as string;
+  check(
+    'An invitation is created and its token handed back exactly once',
+    invited.statusCode === 201 &&
+      typeof inviteToken === 'string' &&
+      inviteToken.length > 20 &&
+      !('tokenHash' in (invited.json()?.data?.invite ?? {})),
+    invited.json()?.data?.invite
+  );
+
+  const listedInvites = await inject('GET', '/api/v1/invites?status=pending', ownerAuth);
+  check(
+    'Invitations are listed without anything that could be redeemed',
+    listedInvites.statusCode === 200 &&
+      (listedInvites.json()?.data ?? []).every(
+        (row: Record<string, unknown>) => !('tokenHash' in row) && !('token' in row)
+      ),
+    listedInvites.json()?.total
+  );
+
+  const dilip = await newcomer('dilip');
+  const wrongPerson = await inject('POST', '/api/v1/join/accept', dilip.auth, {
+    token: inviteToken,
+  });
+  check(
+    'An invitation cannot be used by anyone but the person invited',
+    wrongPerson.statusCode === 403 &&
+      wrongPerson.json()?.error?.code === 'INVITE_EMAIL_MISMATCH',
+    wrongPerson.json()
+  );
+
+  const chetanInvitations = await inject('GET', '/api/v1/join/invitations', chetan.auth);
+  check(
+    'A person sees invitations addressed to them, named by organization',
+    (chetanInvitations.json()?.data ?? []).some(
+      (row: { organizationName?: string }) => typeof row.organizationName === 'string'
+    ),
+    chetanInvitations.json()?.data
+  );
+
+  const inviteAccepted = await inject('POST', '/api/v1/join/accept', chetan.auth, {
+    token: inviteToken,
+  });
+  check(
+    'The invited person accepts and is signed into the organization',
+    inviteAccepted.statusCode === 200 &&
+      inviteAccepted.json()?.data?.session === 'tenant' &&
+      inviteAccepted.json()?.data?.user?.email === chetan.email,
+    inviteAccepted.statusCode
+  );
+
+  const reusedToken = await inject('POST', '/api/v1/join/accept', dilip.auth, {
+    token: inviteToken,
+  });
+  check(
+    'An accepted invitation cannot be used again',
+    reusedToken.statusCode === 404 && reusedToken.json()?.error?.code === 'INVITE_INVALID',
+    reusedToken.json()
+  );
+
+  const toRevoke = await inject('POST', '/api/v1/invites', ownerAuth, { email: dilip.email });
+  const revokedInvite = await inject(
+    'DELETE',
+    `/api/v1/invites/${toRevoke.json()?.data?.invite?._id}`,
+    ownerAuth
+  );
+  const afterRevoke = await inject('POST', '/api/v1/join/accept', dilip.auth, {
+    token: toRevoke.json()?.data?.token,
+  });
+  check(
+    'A withdrawn invitation stops working at once',
+    revokedInvite.statusCode === 200 &&
+      revokedInvite.json()?.data?.status === 'revoked' &&
+      afterRevoke.statusCode === 404,
+    [revokedInvite.json()?.data?.status, afterRevoke.statusCode]
+  );
+
+  const dilipRequests = await inject('GET', '/api/v1/join/requests', dilip.auth);
+  check(
+    'Someone with no requests sees an empty list rather than an error',
+    dilipRequests.statusCode === 200 && Array.isArray(dilipRequests.json()?.data),
+    dilipRequests.statusCode
+  );
+
+  // Put the link back as an organization would keep it.
+  await inject('PATCH', '/api/v1/invites/link', ownerAuth, { requiresApproval: true });
+
   // ─── CROSS-TENANT ISOLATION ─────────────────────────────────────────────────
   section('Cross-tenant isolation (the one that matters)');
 
@@ -1344,6 +1661,25 @@ async function main(): Promise<void> {
     'Tenant B cannot DELETE tenant A’s lead by id',
     crossDelete.statusCode === 404 || crossDelete.statusCode === 403,
     crossDelete.statusCode
+  );
+
+  // Invites: tenant B holds tenant A's code and the id of a request to it.
+  const crossLink = await inject('GET', '/api/v1/invites/link', tenantBAuth);
+  const crossApprove = await inject(
+    'POST',
+    `/api/v1/invites/requests/${ashaRequest?._id}/approve`,
+    tenantBAuth,
+    {}
+  );
+  const crossRequests = await inject('GET', '/api/v1/invites/requests', tenantBAuth);
+  const crossInvites = await inject('GET', '/api/v1/invites', tenantBAuth);
+  check(
+    'Tenant B sees none of tenant A’s invites and cannot approve into it',
+    crossLink.json()?.data?.link === null &&
+      crossApprove.statusCode === 404 &&
+      crossRequests.json()?.total === 0 &&
+      crossInvites.json()?.total === 0,
+    [crossLink.json()?.data, crossApprove.statusCode, crossRequests.json()?.total]
   );
 
   // Transfers: tenant B holds tenant A's exact transfer, lead and user ids.
@@ -2493,6 +2829,22 @@ async function main(): Promise<void> {
     await CallLog.deleteMany({ leadId: { $in: smokeLeadIds } });
     await LeadThreadItem.deleteMany({ lead: { $in: smokeLeadIds } });
     await LeadTransfer.deleteMany({ lead: { $in: smokeLeadIds } });
+    // Everyone who joined during the run, and the ways in that were opened.
+    const joined = await User.find({ email: { $in: joinerEmails } })
+      .select('_id')
+      .lean();
+    await JoinRequest.deleteMany({ email: { $in: joinerEmails } });
+    await OrganizationInvite.deleteMany({ email: { $in: joinerEmails } });
+    await JoinCode.deleteMany({ code: { $in: issuedCodes } });
+    await Notification.deleteMany({ entityType: 'join_request' });
+    await User.deleteMany({ email: { $in: joinerEmails } });
+    await Account.deleteMany({ email: { $in: joinerEmails } });
+    if (acmeOrgId && joined.length > 0) {
+      await Organization.updateOne(
+        { _id: acmeOrgId },
+        { $inc: { 'usage.users': -joined.length } }
+      );
+    }
     await Notification.deleteMany({
       entityId: { $in: [...transferIds.filter(Boolean), ...smokeLeadIds] },
     });

@@ -135,8 +135,7 @@ export default function NoOrganizationScreen() {
           <Button
             mode="outlined"
             icon="account-group-outline"
-            // Wired when "join an organization" is built (KNOWN-GAPS 6.2).
-            onPress={() => undefined}
+            onPress={() => router.push('/organization/join')}
             style={[styles.button, styles.outlinedButton]}
             contentStyle={styles.buttonContent}
             labelStyle={styles.buttonLabel}

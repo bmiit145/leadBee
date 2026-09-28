@@ -21,6 +21,8 @@ export const NOTIFICATION_TYPES = {
   lead_transfer_accepted: 'lead_transfer',
   lead_transfer_declined: 'lead_transfer',
   lead_transfer_cancelled: 'lead_transfer',
+  /** Someone used the invite link and is waiting for an admin to answer. */
+  join_request_received: 'join_request',
 } as const;
 
 export type NotificationType = keyof typeof NOTIFICATION_TYPES;

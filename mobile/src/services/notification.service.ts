@@ -36,5 +36,8 @@ export function notificationHref(entityType: NotificationEntity, entityId: strin
     // open the lead, and afterwards the sender may not be able to either.
     case 'lead_transfer':
       return '/lead/transfers';
+    // The admin's own screen, where the request is waiting to be answered.
+    case 'join_request':
+      return '/organization/invite';
   }
 }

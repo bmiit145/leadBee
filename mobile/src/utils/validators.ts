@@ -45,6 +45,11 @@ export function normalizePhone(raw: string): string {
   return parsed.country === DEFAULT_REGION ? parsed.nationalNumber : parsed.number;
 }
 
+/** Whether an address is worth sending to — the same shape the API accepts. */
+export function isValidEmail(raw: string): boolean {
+  return z.string().trim().email().max(254).safeParse(raw).success;
+}
+
 /**
  * One sign-in field for an email or a mobile number, told apart by an `@`.
  *

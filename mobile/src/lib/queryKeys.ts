@@ -33,6 +33,17 @@ export const queryKeys = {
     forLead: (leadId: string) => ['leads', 'transfers', 'lead', leadId] as const,
     recipients: (search: string) => ['transfer-recipients', search] as const,
   },
+  /** The invite link, invitations and join requests — admin and joiner alike. */
+  invites: {
+    all: ['invites'] as const,
+    link: ['invites', 'link'] as const,
+    list: (status: string) => ['invites', 'list', status] as const,
+    requests: (status: string) => ['invites', 'requests', status] as const,
+    pendingCount: ['invites', 'pending-count'] as const,
+    myInvitations: ['invites', 'mine'] as const,
+    myRequests: ['invites', 'my-requests'] as const,
+    preview: (code: string) => ['invites', 'preview', code] as const,
+  },
   /** Every call list, counter and trend — one target to refresh after a sync. */
   calls: {
     all: ['calls'] as const,

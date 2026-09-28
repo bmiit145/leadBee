@@ -326,19 +326,20 @@ registers in the app, confirms their email, and appears in the console under
 - **Done when.** A code arrives in a real inbox from a production-like
   environment, and no response carries `devCode` there.
 
-### [ ] 6.2 A registered person cannot join or create an organization yet — P0 for the feature
+### [x] 6.2 A registered person cannot join or create an organization yet — fixed 2026-09-24
 
-- **What.** A person with no membership now signs in to an account session
+- **What.** A person with no membership signs in to an account session
   ([ADR-0004](./adr/0004-account-is-the-identity.md)) and lands on the
   "not part of an organization yet" screen
   ([no-organization.tsx](../mobile/app/no-organization.tsx)). **Create your own
-  organization** works (`POST /accounts/organizations`, 2026-09-13): it
-  provisions with the signed-in account as owner and switches the app into the
-  new organization. **Join an organization** does nothing yet.
-- **Fix.** *Join* (invite code, email domain, or request-and-approve), creating
-  a membership through `memberService.addMember`, as an account-realm route
-  (`authenticateAccount`) that answers with a tenant session like create does.
-- **Done when.** A newly registered person can reach a working organization.
+  organization** worked; **Join an organization** did nothing.
+- **Fixed by** [ADR-0007](./adr/0007-joining-an-organization.md): an invite link
+  with a join code, invitations by email, and requests an admin approves —
+  account-realm routes under `/api/v1/join` that answer with a tenant session
+  exactly as create does, with the admin side under `/api/v1/invites`.
+- **Still open.** Verified email domains and SSO/SCIM, for larger customers.
+  Invitations are shared by the admin rather than emailed, because there is no
+  mailer yet (6.1).
 
 ### [ ] 6.3 Registration limits are per instance — P1
 

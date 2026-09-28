@@ -302,8 +302,74 @@ export type NotificationType =
   | 'lead_transfer_requested'
   | 'lead_transfer_accepted'
   | 'lead_transfer_declined'
-  | 'lead_transfer_cancelled';
-export type NotificationEntity = 'lead' | 'task' | 'meeting' | 'lead_transfer';
+  | 'lead_transfer_cancelled'
+  | 'join_request_received';
+export type NotificationEntity =
+  | 'lead'
+  | 'task'
+  | 'meeting'
+  | 'lead_transfer'
+  | 'join_request';
+
+// ─── Joining an organization ────────────────────────────────────────────────
+
+/** Roles an invite may hand out. Organizer roles are given deliberately, later. */
+export type InviteRole = 'user' | 'partner';
+
+/** The organization's shareable link, as the admin screen shows it. */
+export interface JoinLink {
+  _id: string;
+  /** Formatted for reading aloud: `K7QM-XR94`. */
+  code: string;
+  role: InviteRole;
+  requiresApproval: boolean;
+  expiresAt?: string;
+  maxUses?: number;
+  uses: number;
+  createdAt: string;
+}
+
+export type InviteStatus = 'pending' | 'accepted' | 'revoked' | 'expired';
+
+export interface OrganizationInvite {
+  _id: string;
+  email: string;
+  phone?: string;
+  role: InviteRole;
+  message?: string;
+  status: InviteStatus;
+  expiresAt: string;
+  invitedByName: string;
+  createdAt: string;
+  /** Present on invitations addressed to the signed-in person. */
+  organizationName?: string;
+}
+
+export type JoinRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
+
+export interface JoinRequest {
+  _id: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: InviteRole;
+  message?: string;
+  status: JoinRequestStatus;
+  decidedByName?: string;
+  decidedAt?: string;
+  createdAt: string;
+  /** Present on one's own requests, which span organizations. */
+  organizationName?: string;
+}
+
+/** What a code leads to, before anyone commits to anything. */
+export interface InvitePreview {
+  organizationName: string;
+  memberCount: number;
+  role: InviteRole;
+  requiresApproval: boolean;
+  alreadyMember: boolean;
+}
 
 // ─── Lead transfer ──────────────────────────────────────────────────────────
 

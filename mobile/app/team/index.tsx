@@ -239,6 +239,11 @@ export default function TeamScreen() {
           canManageTeam
             ? [
                 {
+                  icon: 'link-outline',
+                  onPress: () => router.push('/organization/invite'),
+                  accessibilityLabel: t('invites.title'),
+                },
+                {
                   icon: 'person-add-outline',
                   onPress: () => router.push('/team/form'),
                   accessibilityLabel: t('team.addMember'),

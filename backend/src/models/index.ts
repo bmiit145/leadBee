@@ -56,5 +56,18 @@ export {
   type INotification,
   type NotificationType,
 } from './Notification.js';
+export { JoinCode, type IJoinCode } from './JoinCode.js';
+export {
+  OrganizationInvite,
+  INVITE_STATUS_ORDER,
+  type IOrganizationInvite,
+  type InviteStatus,
+} from './OrganizationInvite.js';
+export {
+  JoinRequest,
+  JOIN_REQUEST_STATUS_ORDER,
+  type IJoinRequest,
+  type JoinRequestStatus,
+} from './JoinRequest.js';
 export { QuickReply, type IQuickReply } from './QuickReply.js';
 export { AuditLog, type IAuditLog } from './AuditLog.js';

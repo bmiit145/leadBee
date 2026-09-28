@@ -1,6 +1,8 @@
 import type { Types } from 'mongoose';
 import { User, type IUser } from '../../models/User.js';
-import { Account } from '../../models/Account.js';
+import { Account, type IAccount } from '../../models/Account.js';
+// Aliased: `Role` is already the role-name union from the domain vocabulary.
+import { Role as RoleRecord } from '../../models/Role.js';
 import { AppError } from '../../lib/errors.js';
 import { logger } from '../../lib/logger.js';
 import type { Role } from '../../config/constants.js';
@@ -74,5 +76,39 @@ export const memberService = {
       }
       throw error;
     }
+  },
+
+  /**
+   * Makes a membership for someone who already has a LeadBee account — how a
+   * person joins through an invitation, a join link or an approved request.
+   *
+   * Nothing is created for the identity and no password is involved: they
+   * already sign in. Must run inside the organization's tenant scope.
+   */
+  async addExistingAccount(
+    organizationId: Types.ObjectId,
+    account: IAccount,
+    membership: { role: Role; roleId?: Types.ObjectId }
+  ): Promise<IUser> {
+    // Scoped by the plugin, so this asks "already in *this* organization".
+    if (await User.exists({ accountId: account._id })) {
+      throw AppError.conflict('This person is already a member of this organization.');
+    }
+
+    // Without the organization's role record the membership carries no
+    // permissions at all, and the person signs in to a working session that is
+    // refused everywhere. Resolved here rather than at each caller.
+    const roleId =
+      membership.roleId ??
+      (await RoleRecord.findOne({ name: membership.role }).select('_id').lean())?._id;
+
+    return User.create({
+      organizationId,
+      accountId: account._id,
+      ...membershipCopy(account),
+      role: membership.role,
+      roleId,
+      permissions: [],
+    });
   },
 };

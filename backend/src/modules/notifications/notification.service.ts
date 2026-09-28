@@ -65,6 +65,10 @@ const PUSH_COPY: Record<NotificationType, (actorName: string, subject: string) =
     title: 'Lead transfer withdrawn',
     body: `${actorName} withdrew the transfer of ${subject}`,
   }),
+  join_request_received: (actorName, subject) => ({
+    title: 'Request to join',
+    body: `${actorName} wants to join ${subject}`,
+  }),
 };
 
 export const notificationService = {

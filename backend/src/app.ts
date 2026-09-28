@@ -26,6 +26,7 @@ import { taskRoutes } from './modules/tasks/task.routes.js';
 import { meetingRoutes } from './modules/meetings/meeting.routes.js';
 import { callRoutes } from './modules/calls/call.routes.js';
 import { leadTransferRoutes } from './modules/leadTransfers/leadTransfer.routes.js';
+import { inviteRoutes, joinRoutes } from './modules/invites/invite.routes.js';
 import { userRoutes } from './modules/users/user.routes.js';
 import { roleRoutes } from './modules/roles/role.routes.js';
 import { lookupRoutes } from './modules/lookups/lookup.routes.js';
@@ -80,6 +81,7 @@ export async function buildApp() {
   await app.register(meetingRoutes, { prefix: `${API_PREFIX}/meetings` });
   await app.register(callRoutes, { prefix: `${API_PREFIX}/calls` });
   await app.register(leadTransferRoutes, { prefix: `${API_PREFIX}/lead-transfers` });
+  await app.register(inviteRoutes, { prefix: `${API_PREFIX}/invites` });
   await app.register(userRoutes, { prefix: `${API_PREFIX}/users` });
   await app.register(roleRoutes, { prefix: `${API_PREFIX}/roles` });
   await app.register(lookupRoutes, { prefix: API_PREFIX });
@@ -87,6 +89,8 @@ export async function buildApp() {
 
   // A person registering before any organization. Public, and neither realm.
   await app.register(accountRoutes, { prefix: `${API_PREFIX}/accounts` });
+  // How that person gets into one: an invite code, or an invitation by email.
+  await app.register(joinRoutes, { prefix: `${API_PREFIX}/join` });
 
   // Control plane. Separate token realm — see lib/tokens.ts.
   await app.register(platformRoutes, { prefix: `${API_PREFIX}/platform` });
