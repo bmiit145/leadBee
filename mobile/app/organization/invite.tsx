@@ -342,19 +342,6 @@ export default function InviteMembersScreen() {
           ))
         )}
 
-        {/* The fourth way in: an admin creates the person outright. */}
-        <TouchableOpacity
-          style={styles.addDirectly}
-          onPress={() => router.push('/team/form')}
-          accessibilityRole="button"
-        >
-          <Ionicons name="person-add-outline" size={18} color={colors.primary} />
-          <View style={styles.settingText}>
-            <Text style={styles.addDirectlyLabel}>{t('invites.addDirectly')}</Text>
-            <Text style={styles.settingHint}>{t('invites.addDirectlyHint')}</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
-        </TouchableOpacity>
       </ScrollView>
 
       {/* ─── QR code, for handing the link over in person ──────────────────── */}
@@ -651,19 +638,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   outlineBtnText: { fontSize: 14.5, fontWeight: '700', color: colors.text },
-  addDirectly: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    margin: spacing.md,
-    marginTop: spacing.lg,
-    padding: spacing.md,
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  addDirectlyLabel: { fontSize: 15, fontWeight: '700', color: colors.primary },
   qrWrap: {
     alignSelf: 'center',
     padding: spacing.md,

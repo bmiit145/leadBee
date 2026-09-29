@@ -37,8 +37,6 @@ import { colors, spacing, borderRadius, shadows } from '../../src/theme';
 type StatusTab = 'active' | 'inactive';
 
 const PAGE_SIZE = 50;
-/** Mirrors the API: this password signs the member in to every organization they belong to. */
-const MIN_PASSWORD = 8;
 
 /**
  * Team Members — the organizer's User Management.
@@ -63,9 +61,6 @@ export default function TeamScreen() {
   const debouncedSearch = useDebouncedValue(search.trim());
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [toggling, setToggling] = useState<TeamMember | null>(null);
-  const [resetting, setResetting] = useState<TeamMember | null>(null);
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
 
   const canManageTeam = hasPermission('users.manage');
 
@@ -109,35 +104,6 @@ export default function TeamScreen() {
       Alert.alert(t('common.error'), apiErrorMessage(error, t('team.actionFailed')));
     },
   });
-
-  const closeReset = () => {
-    setResetting(null);
-    setNewPassword('');
-    setConfirmPassword('');
-  };
-
-  const resetMutation = useMutation({
-    mutationFn: ({ member, password }: { member: TeamMember; password: string }) =>
-      userService.resetPassword(member._id, password),
-    onSuccess: (_result, { member }) => {
-      closeReset();
-      Alert.alert(t('common.success'), t('team.passwordReset', { name: member.name }));
-    },
-    onError: (error) => Alert.alert(t('common.error'), apiErrorMessage(error, t('team.actionFailed'))),
-  });
-
-  const submitReset = () => {
-    if (!resetting) return;
-    if (newPassword.length < MIN_PASSWORD) {
-      Alert.alert(t('common.error'), t('team.passwordTooShort'));
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      Alert.alert(t('common.error'), t('team.passwordMismatch'));
-      return;
-    }
-    resetMutation.mutate({ member: resetting, password: newPassword });
-  };
 
   const roleLabel = (member: TeamMember): string => {
     // A custom role's own name says more than the built-in role it sits on.
@@ -201,17 +167,6 @@ export default function TeamScreen() {
                 router.push(`/team/form?id=${item._id}`);
               }}
             />
-            {!isSelf && item.isActive ? (
-              <Menu.Item
-                title={t('team.resetPassword')}
-                leadingIcon="lock-reset"
-                titleStyle={styles.menuText}
-                onPress={() => {
-                  setMenuFor(null);
-                  setResetting(item);
-                }}
-              />
-            ) : null}
             {!isSelf ? (
               <Menu.Item
                 title={item.isActive ? t('team.deactivate') : t('team.activate')}
@@ -239,8 +194,8 @@ export default function TeamScreen() {
           canManageTeam
             ? [{
                 icon: 'person-add-outline',
-                onPress: () => router.push('/team/form'),
-                accessibilityLabel: t('team.addMember'),
+                onPress: () => router.push('/organization/invite'),
+                accessibilityLabel: t('team.inviteMember'),
               }]
             : []
         }
@@ -320,46 +275,6 @@ export default function TeamScreen() {
         onConfirm={() => toggling && toggleMutation.mutate(toggling)}
       />
 
-      <CenterDialog
-        visible={!!resetting}
-        onDismiss={closeReset}
-        title={t('team.resetTitle')}
-        titleVariant="plain"
-      >
-        <Text style={styles.dialogMessage}>
-          {resetting ? t('team.resetMessage', { name: resetting.name }) : ''}
-        </Text>
-        <TextInput
-          mode="outlined"
-          label={t('team.newPassword')}
-          value={newPassword}
-          onChangeText={setNewPassword}
-          secureTextEntry
-          autoCapitalize="none"
-          autoCorrect={false}
-          outlineColor={colors.inputBorder}
-          activeOutlineColor={colors.inputBorderFocused}
-          style={styles.input}
-        />
-        <TextInput
-          mode="outlined"
-          label={t('team.confirmPassword')}
-          value={confirmPassword}
-          onChangeText={setConfirmPassword}
-          secureTextEntry
-          autoCapitalize="none"
-          autoCorrect={false}
-          outlineColor={colors.inputBorder}
-          activeOutlineColor={colors.inputBorderFocused}
-          style={styles.input}
-        />
-        <PrimaryButton
-          label={t('team.resetPassword')}
-          onPress={submitReset}
-          loading={resetMutation.isPending}
-          style={styles.dialogButton}
-        />
-      </CenterDialog>
     </View>
   );
 }

@@ -1,4 +1,4 @@
-import { Types, type FilterQuery } from 'mongoose';
+import { Types, type FilterQuery, type ClientSession } from 'mongoose';
 import { JoinCode, type IJoinCode } from '../../models/JoinCode.js';
 import {
   OrganizationInvite,
@@ -13,6 +13,7 @@ import { AppError } from '../../lib/errors.js';
 import { logger } from '../../lib/logger.js';
 import { pageParams } from '../../lib/pagination.js';
 import { requireOrganizationId, runInTenantScope, withoutTenantScope } from '../../lib/tenantContext.js';
+import { withOptionalTransaction } from '../../lib/transactions.js';
 import { ORGANIZER_ROLES, ROLES, type Role } from '../../config/constants.js';
 import { organizationService } from '../organizations/organization.service.js';
 import { memberService } from '../users/member.service.js';
@@ -249,51 +250,53 @@ export const inviteService = {
     viewer: Viewer,
     options: { role?: Role } = {}
   ): Promise<Record<string, unknown>> {
-    const request = await JoinRequest.findById(requestId);
-    if (!request) throw AppError.notFound('Request not found');
-    if (request.status !== 'pending') {
-      throw new AppError('This request has already been answered.', 409, INVITE_ERROR.NOT_PENDING);
-    }
+    return withOptionalTransaction(async (session) => {
+      const request = await JoinRequest.findById(requestId).session(session ?? null);
+      if (!request) throw AppError.notFound('Request not found');
+      if (request.status !== 'pending') {
+        throw new AppError('This request has already been answered.', 409, INVITE_ERROR.NOT_PENDING);
+      }
 
-    const now = new Date();
-    if (decision === 'reject') {
-      request.status = 'rejected';
+      const now = new Date();
+      if (decision === 'reject') {
+        request.status = 'rejected';
+        request.decidedBy = viewer.userId;
+        request.decidedByName = viewer.name;
+        request.decidedAt = now;
+        await request.save({ session });
+        return presentRequest(request);
+      }
+
+      const role = options.role ?? request.role;
+      assertLinkRole(role);
+
+      const organizationId = requireOrganizationId();
+      const organization = await Organization.findById(organizationId).session(session ?? null);
+      if (!organization) throw AppError.notFound('Organization not found');
+      await organizationService.assertCanAddUser(organization);
+
+      const account = await withoutTenantScope('join request: the account being approved', () =>
+        Account.findById(request.accountId).session(session ?? null).exec()
+      );
+      if (!account) throw AppError.badRequest('That person no longer has a LeadBee account.');
+
+      const membership = await memberService.addExistingAccount(organizationId, account, { role }, session);
+      await Organization.updateOne({ _id: organizationId }, { $inc: { 'usage.users': 1 } }, { session });
+
+      request.status = 'approved';
+      request.role = role;
       request.decidedBy = viewer.userId;
       request.decidedByName = viewer.name;
       request.decidedAt = now;
-      await request.save();
+      request.membership = membership._id;
+      await request.save({ session });
+
+      logger.info(
+        { userId: membership._id.toString(), decidedBy: viewer.userId.toString() },
+        'join request approved'
+      );
       return presentRequest(request);
-    }
-
-    const role = options.role ?? request.role;
-    assertLinkRole(role);
-
-    const organizationId = requireOrganizationId();
-    const organization = await Organization.findById(organizationId);
-    if (!organization) throw AppError.notFound('Organization not found');
-    await organizationService.assertCanAddUser(organization);
-
-    const account = await withoutTenantScope('join request: the account being approved', () =>
-      Account.findById(request.accountId).exec()
-    );
-    if (!account) throw AppError.badRequest('That person no longer has a LeadBee account.');
-
-    const membership = await memberService.addExistingAccount(organizationId, account, { role });
-    await Organization.updateOne({ _id: organizationId }, { $inc: { 'usage.users': 1 } });
-
-    request.status = 'approved';
-    request.role = role;
-    request.decidedBy = viewer.userId;
-    request.decidedByName = viewer.name;
-    request.decidedAt = now;
-    request.membership = membership._id;
-    await request.save();
-
-    logger.info(
-      { userId: membership._id.toString(), decidedBy: viewer.userId.toString() },
-      'join request approved'
-    );
-    return presentRequest(request);
+    });
   },
 
   // ─── Joining: everything below runs before the person has a membership ────
@@ -350,40 +353,42 @@ export const inviteService = {
     const code = normalizeJoinCode(codeInput);
     if (!code) throw invalidCode();
 
-    const found = await withoutTenantScope('join: resolve an invite code to its organization', () =>
-      JoinCode.findOne({ code }).exec()
-    );
-    if (!found || !codeIsOpen(found, new Date())) throw invalidCode();
+    return withOptionalTransaction(async (session) => {
+      const found = await withoutTenantScope('join: resolve an invite code to its organization', () =>
+        JoinCode.findOne({ code }).session(session ?? null).exec()
+      );
+      if (!found || !codeIsOpen(found, new Date())) throw invalidCode();
 
-    const organization = await withoutTenantScope('join: the organization being joined', () =>
-      Organization.findById(found.organizationId).exec()
-    );
-    if (!organization) throw invalidCode();
+      const organization = await withoutTenantScope('join: the organization being joined', () =>
+        Organization.findById(found.organizationId).session(session ?? null).exec()
+      );
+      if (!organization) throw invalidCode();
 
-    await assertNotAlreadyMember(found.organizationId, account._id);
+      await assertNotAlreadyMember(found.organizationId, account._id, session);
 
-    if (found.requiresApproval) {
-      const request = await raiseJoinRequest(found, account, organization, message);
-      return { kind: 'requested', request, organizationName: organization.name };
-    }
+      if (found.requiresApproval) {
+        const request = await raiseJoinRequest(found, account, organization, message, session);
+        return { kind: 'requested', request, organizationName: organization.name };
+      }
 
-    // Claim a use before the membership exists, so a limited code cannot be
-    // over-redeemed; a failure afterwards costs one use, never an extra member.
-    const claimed = await withoutTenantScope('join: claim one use of an invite code', () =>
-      JoinCode.findOneAndUpdate(
-        {
-          _id: found._id,
-          isActive: true,
-          $or: [{ maxUses: { $exists: false } }, { $expr: { $lt: ['$uses', '$maxUses'] } }],
-        },
-        { $inc: { uses: 1 } },
-        { new: true }
-      ).exec()
-    );
-    if (!claimed) throw invalidCode();
+      // Claim a use before the membership exists, so a limited code cannot be
+      // over-redeemed; a failure afterwards costs one use, never an extra member.
+      const claimed = await withoutTenantScope('join: claim one use of an invite code', () =>
+        JoinCode.findOneAndUpdate(
+          {
+            _id: found._id,
+            isActive: true,
+            $or: [{ maxUses: { $exists: false } }, { $expr: { $lt: ['$uses', '$maxUses'] } }],
+          },
+          { $inc: { uses: 1 } },
+          { new: true, session }
+        ).exec()
+      );
+      if (!claimed) throw invalidCode();
 
-    const session = await createMembershipSession(organization, account, found.role);
-    return { kind: 'joined', session };
+      const membershipSession = await createMembershipSession(organization, account, found.role, session);
+      return { kind: 'joined', session: membershipSession };
+    });
   },
 
   /**
@@ -394,48 +399,51 @@ export const inviteService = {
    */
   async acceptInvite(account: IAccount, token: string): Promise<JoinOutcome> {
     const tokenHash = hashInviteToken(token);
-    const invite = await withoutTenantScope('invite: resolve a token to its invitation', () =>
-      OrganizationInvite.findOne({ tokenHash }).exec()
-    );
-    if (!invite || !digestsMatch(invite.tokenHash, tokenHash) || !inviteIsOpen(invite, new Date())) {
-      throw invalidCode();
-    }
-
-    if (invite.email !== account.email.trim().toLowerCase()) {
-      throw new AppError(
-        `This invitation was sent to ${invite.email}. Sign in with that email to accept it.`,
-        403,
-        INVITE_ERROR.EMAIL_MISMATCH
+    return withOptionalTransaction(async (session) => {
+      const invite = await withoutTenantScope('invite: resolve a token to its invitation', () =>
+        OrganizationInvite.findOne({ tokenHash }).session(session ?? null).exec()
       );
-    }
+      if (!invite || !digestsMatch(invite.tokenHash, tokenHash) || !inviteIsOpen(invite, new Date())) {
+        throw invalidCode();
+      }
 
-    const organization = await withoutTenantScope('invite: the organization being joined', () =>
-      Organization.findById(invite.organizationId).exec()
-    );
-    if (!organization) throw invalidCode();
+      if (invite.email !== account.email.trim().toLowerCase()) {
+        throw new AppError(
+          `This invitation was sent to ${invite.email}. Sign in with that email to accept it.`,
+          403,
+          INVITE_ERROR.EMAIL_MISMATCH
+        );
+      }
 
-    await assertNotAlreadyMember(invite.organizationId, account._id);
+      const organization = await withoutTenantScope('invite: the organization being joined', () =>
+        Organization.findById(invite.organizationId).session(session ?? null).exec()
+      );
+      if (!organization) throw invalidCode();
 
-    // Single use: the first acceptance flips it, a second finds nothing.
-    const claimed = await withoutTenantScope('invite: claim a single-use invitation', () =>
-      OrganizationInvite.findOneAndUpdate(
-        { _id: invite._id, status: 'pending' },
-        { $set: { status: 'accepted', acceptedAt: new Date() } },
-        { new: true }
-      ).exec()
-    );
-    if (!claimed) throw invalidCode();
+      await assertNotAlreadyMember(invite.organizationId, account._id, session);
 
-    const session = await createMembershipSession(organization, account, invite.role);
+      // Single use: the first acceptance flips it, a second finds nothing.
+      const claimed = await withoutTenantScope('invite: claim a single-use invitation', () =>
+        OrganizationInvite.findOneAndUpdate(
+          { _id: invite._id, status: 'pending' },
+          { $set: { status: 'accepted', acceptedAt: new Date() } },
+          { new: true, session }
+        ).exec()
+      );
+      if (!claimed) throw invalidCode();
 
-    await withoutTenantScope('invite: record which membership accepted it', () =>
-      OrganizationInvite.updateOne(
-        { _id: invite._id },
-        { $set: { acceptedBy: session.user._id } }
-      ).exec()
-    );
+      const membershipSession = await createMembershipSession(organization, account, invite.role, session);
 
-    return { kind: 'joined', session };
+      await withoutTenantScope('invite: record which membership accepted it', () =>
+        OrganizationInvite.updateOne(
+          { _id: invite._id },
+          { $set: { acceptedBy: membershipSession.user._id } },
+          { session }
+        ).exec()
+      );
+
+      return { kind: 'joined', session: membershipSession };
+    });
   },
 
   /** Invitations addressed to this person, across organizations. */
@@ -495,7 +503,8 @@ async function raiseJoinRequest(
   code: IJoinCode,
   account: IAccount,
   organization: IOrganization,
-  message?: string
+  message?: string,
+  session?: ClientSession
 ): Promise<Record<string, unknown>> {
   const request = await runInTenantScope(
     {
@@ -506,7 +515,7 @@ async function raiseJoinRequest(
     },
     async () => {
       try {
-        return await JoinRequest.create({
+        const [created] = await JoinRequest.create([{
           organizationId: code.organizationId,
           accountId: account._id,
           name: `${account.firstName} ${account.lastName ?? ''}`.trim(),
@@ -515,7 +524,11 @@ async function raiseJoinRequest(
           joinCode: code._id,
           role: code.role,
           message,
-        });
+        }], { session });
+        if (!created) {
+          throw new AppError('Failed to create join request', 500);
+        }
+        return created;
       } catch (error) {
         if (!isDuplicateKey(error)) throw error;
         throw new AppError(
@@ -526,6 +539,10 @@ async function raiseJoinRequest(
       }
     }
   );
+
+  if (!request) {
+    throw new AppError('Failed to create join request', 500);
+  }
 
   await notifyOrganizers(code.organizationId, request, organization);
   return presentRequest(request);
@@ -570,7 +587,8 @@ async function notifyOrganizers(
 async function createMembershipSession(
   organization: IOrganization,
   account: IAccount,
-  role: Role
+  role: Role,
+  session?: ClientSession
 ): Promise<LoginResult> {
   await organizationService.assertCanAddUser(organization);
 
@@ -582,13 +600,14 @@ async function createMembershipSession(
       permissions: ['*'],
     },
     async () => {
-      const created = await memberService.addExistingAccount(organization._id, account, { role });
+      const created = await memberService.addExistingAccount(organization._id, account, { role }, session);
       await Organization.updateOne(
         { _id: organization._id },
-        { $inc: { 'usage.users': 1 } }
+        { $inc: { 'usage.users': 1 } },
+        { session }
       ).exec();
       // Re-read with the session hashes the sign-in below appends to.
-      return User.findById(created._id).select('+refreshTokens').exec();
+      return User.findById(created._id).session(session ?? null).select('+refreshTokens').exec();
     }
   );
   if (!membership) throw AppError.internal('The new membership could not be opened.');
@@ -600,10 +619,11 @@ async function createMembershipSession(
 
 async function assertNotAlreadyMember(
   organizationId: Types.ObjectId,
-  accountId: Types.ObjectId
+  accountId: Types.ObjectId,
+  session?: ClientSession
 ): Promise<void> {
   const existing = await withoutTenantScope('join: is this person already a member?', () =>
-    User.exists({ organizationId, accountId }).exec()
+    User.exists({ organizationId, accountId }).session(session ?? null).exec()
   );
   if (existing) {
     throw new AppError(

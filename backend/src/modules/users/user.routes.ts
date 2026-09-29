@@ -7,13 +7,11 @@ import { Role } from '../../models/Role.js';
 import { Organization } from '../../models/Organization.js';
 import { organizationService } from '../organizations/organization.service.js';
 import { userPolicy, type UserManager } from './user.service.js';
-import { memberService } from './member.service.js';
 import { identityService } from '../accounts/identity.service.js';
 import { auditService } from '../audit/audit.service.js';
 import { changedFields } from '../../lib/changedFields.js';
 import { viewerOf } from '../../lib/viewer.js';
 import { AppError } from '../../lib/errors.js';
-import { mobilePhoneSchema } from '../../lib/phone.js';
 import { pageParams } from '../../lib/pagination.js';
 import {
   booleanQuery,
@@ -40,18 +38,7 @@ const security = [{ tenantToken: [] }];
 const emailSchema = z.string().trim().toLowerCase().email('A valid email is required').max(254);
 const passwordSchema = z.string().min(8, 'Password must be at least 8 characters').max(128);
 
-const createUserBody = z.object({
-  name: z.string().trim().min(2).max(80),
-  phone: mobilePhoneSchema,
-  // Required: with sign-in by email or mobile, an email is half of who a person is.
-  email: emailSchema,
-  // Only used when the person is new to LeadBee. See memberService.addMember.
-  password: passwordSchema.optional(),
-  role: z.enum(ROLE_ORDER as [string, ...string[]]).default(ROLES.USER),
-  roleId: objectIdSchema.optional(),
-  permissions: z.array(z.string()).optional(),
-  designation: z.string().trim().optional(),
-});
+
 
 const updateUserBody = z.object({
   name: z.string().trim().min(2).max(80).optional(),
@@ -162,61 +149,7 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
     },
   });
 
-  r.route({
-    method: 'POST',
-    url: '/',
-    preHandler: [app.requirePermission(PERMISSIONS.USERS_MANAGE)],
-    schema: {
-      tags: ['users'],
-      summary: 'Add a person to the organization',
-      description:
-        'If the email and mobile already belong to someone on LeadBee, their ' +
-        'existing account is linked — they keep their own password — and the ' +
-        'response carries `linkedExistingAccount: true`. An email or mobile tied ' +
-        'to a different person answers 409. The role may not rank above the ' +
-        'caller’s, and any custom role or extra permissions must be ones the ' +
-        'caller already holds.',
-      security,
-      body: createUserBody,
-      response: { 201: okEnvelope, ...commonErrors, 402: commonErrors[400], 409: commonErrors[400] },
-    },
-    handler: async (request, reply) => {
-      const actor = managerOf(request);
-      const body = request.body;
 
-      userPolicy.assertCanAssignRole(actor, body.role);
-      if (body.permissions) userPolicy.assertCanGrant(actor, body.permissions);
-
-      const organizationId = requireOrganizationId();
-      await organizationService.assertCanAddUser(request.auth!.organization);
-
-      const roleId = await roleIdFor(actor, body.role, body.roleId);
-
-      const { user, linkedExistingAccount } = await memberService.addMember(organizationId, {
-        name: body.name,
-        email: body.email,
-        phone: body.phone,
-        password: body.password,
-        role: body.role as RoleName,
-        roleId,
-        permissions: body.permissions,
-        designation: body.designation,
-      });
-
-      await Organization.updateOne({ _id: organizationId }, { $inc: { 'usage.users': 1 } });
-
-      await auditService.record({
-        action: AUDIT_ACTIONS.USER_CREATED,
-        entityType: 'user',
-        entityId: user._id,
-        actor: viewerOf(request),
-        after: { ...auditView(user), linkedExistingAccount },
-        origin: originOf(request),
-      });
-
-      return reply.status(201).send(ok({ ...user.toJSON(), linkedExistingAccount }));
-    },
-  });
 
   r.route({
     method: 'GET',

@@ -18,7 +18,6 @@ import { apiErrorMessage } from '../../src/services/api';
 import { useAuth } from '../../src/stores/auth.store';
 import { queryKeys } from '../../src/lib/queryKeys';
 import { assignableRoles } from '../../src/config/roles';
-import { isValidMobilePhone, normalizePhone } from '../../src/utils/validators';
 import {
   EmptyState,
   FieldLabel,
@@ -32,36 +31,18 @@ import { SelectField } from '../../src/components/fields/SelectField';
 import type { UserRole } from '../../src/types';
 import { colors, spacing, borderRadius } from '../../src/theme';
 
-/** Loose on purpose: the API owns the real rule; this only catches typos early. */
-const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
-const MIN_PASSWORD = 8;
 const MIN_NAME = 2;
 
-interface FormState {
-  name: string;
-  phone: string;
-  email: string;
-  designation: string;
-  role: UserRole;
-  password: string;
-}
-
-const EMPTY_FORM: FormState = {
-  name: '',
-  phone: '',
-  email: '',
-  designation: '',
-  role: 'user',
-  password: '',
-};
-
 /**
- * Add a team member, or edit one.
+ * Edit an existing team member's profile.
  *
- * The mobile number is set once: it is the member's sign-in ID, and changing it
- * under them is a quiet way to lock them out. Roles offered stop at the caller's
- * own. On your own account the role is shown but locked — the API will not let
- * anyone change their own access, and offering it would only earn a 403.
+ * This screen is reached only from the team list's "Edit" menu item, which
+ * passes `?id=<userId>`. Name and designation can be changed freely; the
+ * mobile number is locked (it is the member's sign-in ID); changing the role
+ * is allowed only on someone else, never on yourself.
+ *
+ * Adding new members is handled by the Invite Members hub at
+ * `/organization/invite` — there is no manual "create account" form.
  */
 export default function TeamMemberFormScreen() {
   const { t } = useTranslation();
@@ -70,64 +51,57 @@ export default function TeamMemberFormScreen() {
   const { id } = useLocalSearchParams<{ id?: string }>();
   const { user, reloadSession } = useAuth();
 
-  const isEdit = Boolean(id);
-  const isSelf = isEdit && id === user?._id;
+  // This screen only handles edits; if there is no id, go to the invite hub.
+  useEffect(() => {
+    if (!id) router.replace('/organization/invite');
+  }, [id, router]);
+
+  const isSelf = id === user?._id;
 
   const member = useQuery({
     queryKey: queryKeys.users.detail(id ?? ''),
     queryFn: () => userService.getById(id!),
-    enabled: isEdit,
+    enabled: Boolean(id),
   });
 
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
-  const [hydrated, setHydrated] = useState(!isEdit);
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    designation: '',
+    role: 'user' as UserRole,
+  });
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     if (hydrated || !member.data) return;
     setForm({
       name: member.data.name,
-      phone: member.data.phone,
       email: member.data.email ?? '',
       designation: member.data.designation ?? '',
       role: member.data.role,
-      password: '',
     });
     setHydrated(true);
   }, [hydrated, member.data]);
 
   const set =
-    <K extends keyof FormState>(key: K) =>
-    (value: FormState[K]) =>
+    <K extends keyof typeof form>(key: K) =>
+    (value: (typeof form)[K]) =>
       setForm((prev) => ({ ...prev, [key]: value }));
 
   const save = useMutation({
-    mutationFn: async (): Promise<'created' | 'linked' | 'saved' | 'unchanged'> => {
+    mutationFn: async (): Promise<'saved' | 'unchanged'> => {
+      if (!member.data) return 'unchanged';
+      const changes: TeamMemberChanges = {};
       const name = form.name.trim();
       const email = form.email.trim();
       const designation = form.designation.trim();
-
-      if (isEdit && member.data) {
-        const changes: TeamMemberChanges = {};
-        if (name !== member.data.name) changes.name = name;
-        if (email !== (member.data.email ?? '')) changes.email = email;
-        if (designation !== (member.data.designation ?? '')) changes.designation = designation;
-        if (!isSelf && form.role !== member.data.role) changes.role = form.role;
-        if (Object.keys(changes).length === 0) return 'unchanged';
-        await userService.update(member.data._id, changes);
-        return 'saved';
-      }
-
-      const created = await userService.create({
-        name,
-        phone: normalizePhone(form.phone),
-        email,
-        password: form.password,
-        role: form.role,
-        designation: designation || undefined,
-      });
-      // Someone already on LeadBee keeps their own password; say so, or the
-      // admin will share one that does not work.
-      return created.linkedExistingAccount ? 'linked' : 'created';
+      if (name !== member.data.name) changes.name = name;
+      if (email !== (member.data.email ?? '')) changes.email = email;
+      if (designation !== (member.data.designation ?? '')) changes.designation = designation;
+      if (!isSelf && form.role !== member.data.role) changes.role = form.role;
+      if (Object.keys(changes).length === 0) return 'unchanged';
+      await userService.update(member.data._id, changes);
+      return 'saved';
     },
     onSuccess: (outcome) => {
       if (outcome === 'unchanged') {
@@ -137,13 +111,7 @@ export default function TeamMemberFormScreen() {
       void qc.invalidateQueries({ queryKey: queryKeys.users.all });
       // Seats used, and your own name when you edited yourself, live in the session.
       void reloadSession().catch(() => undefined);
-      const text =
-        outcome === 'created'
-          ? t('team.created')
-          : outcome === 'linked'
-            ? t('team.linkedExisting')
-            : t('team.saved');
-      Alert.alert(t('common.success'), text, [
+      Alert.alert(t('common.success'), t('team.saved'), [
         { text: t('common.ok'), onPress: () => router.back() },
       ]);
     },
@@ -151,19 +119,10 @@ export default function TeamMemberFormScreen() {
   });
 
   const handleSave = () => {
-    const email = form.email.trim();
     const problem =
       form.name.trim().length < MIN_NAME
         ? t('team.nameRequired')
-        : !isEdit && !isValidMobilePhone(form.phone)
-          ? t('team.phoneInvalid')
-          : !email
-            ? t('team.emailRequired')
-            : !EMAIL_PATTERN.test(email)
-              ? t('team.emailInvalid')
-            : !isEdit && form.password.length < MIN_PASSWORD
-              ? t('team.passwordTooShort')
-              : null;
+        : null;
     if (problem) {
       Alert.alert(t('common.error'), problem);
       return;
@@ -171,9 +130,9 @@ export default function TeamMemberFormScreen() {
     save.mutate();
   };
 
-  const title = isEdit ? t('team.editMember') : t('team.addMember');
+  const title = t('team.editMember');
 
-  if (isEdit && !hydrated) {
+  if (!hydrated) {
     return (
       <View style={styles.screen}>
         <ScreenHeader title={title} />
@@ -224,18 +183,16 @@ export default function TeamMemberFormScreen() {
             left={<TextInput.Icon icon="account-outline" color={colors.textSecondary} />}
           />
 
-          <FieldLabel required>{t('team.phone')}</FieldLabel>
+          <FieldLabel>{t('team.phone')}</FieldLabel>
           <TextInput
             {...inputProps}
-            value={form.phone}
-            onChangeText={set('phone')}
-            keyboardType="phone-pad"
-            disabled={isEdit}
+            value={member.data?.phone ?? ''}
+            disabled
             left={<TextInput.Icon icon="phone-outline" color={colors.textSecondary} />}
           />
-          {isEdit ? <Text style={styles.hint}>{t('team.phoneLocked')}</Text> : null}
+          <Text style={styles.hint}>{t('team.phoneLocked')}</Text>
 
-          <FieldLabel required>{t('team.email')}</FieldLabel>
+          <FieldLabel>{t('team.email')}</FieldLabel>
           <TextInput
             {...inputProps}
             value={form.email}
@@ -278,28 +235,12 @@ export default function TeamMemberFormScreen() {
               onChange={set('role')}
             />
           )}
-
-          {!isEdit ? (
-            <>
-              <FieldLabel required>{t('team.password')}</FieldLabel>
-              <TextInput
-                {...inputProps}
-                value={form.password}
-                onChangeText={set('password')}
-                secureTextEntry
-                autoCapitalize="none"
-                autoCorrect={false}
-                left={<TextInput.Icon icon="lock-outline" color={colors.textSecondary} />}
-              />
-              <Text style={styles.hint}>{t('team.passwordHint')}</Text>
-            </>
-          ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
 
       <StickyFooter>
         <PrimaryButton
-          label={isEdit ? t('team.save') : t('team.addMember')}
+          label={t('team.save')}
           onPress={handleSave}
           loading={save.isPending}
         />

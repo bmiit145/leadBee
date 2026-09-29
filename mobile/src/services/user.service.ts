@@ -13,21 +13,6 @@ export interface TeamMember {
   isActive: boolean;
   lastLoginAt?: string;
   createdAt?: string;
-  /**
-   * On a create response only: the email and mobile already belonged to someone
-   * on LeadBee, so their account was added and the typed password was not used.
-   */
-  linkedExistingAccount?: boolean;
-}
-
-export interface NewTeamMember {
-  name: string;
-  phone: string;
-  /** Required: members sign in with their email or mobile number. */
-  email: string;
-  password: string;
-  role: UserRole;
-  designation?: string;
 }
 
 /** Only what changed. `role` is left out unless it changed: the API refuses any
@@ -71,10 +56,6 @@ export const userService = {
     return res.data.data;
   },
 
-  async create(input: NewTeamMember): Promise<TeamMember> {
-    const res = await api.post<ApiResponse<TeamMember>>('/users', input);
-    return res.data.data;
-  },
 
   async update(id: string, changes: TeamMemberChanges): Promise<TeamMember> {
     const res = await api.put<ApiResponse<TeamMember>>(`/users/${id}`, changes);
@@ -87,7 +68,4 @@ export const userService = {
     return res.data.data;
   },
 
-  async resetPassword(id: string, newPassword: string): Promise<void> {
-    await api.post(`/users/${id}/reset-password`, { newPassword });
-  },
 };

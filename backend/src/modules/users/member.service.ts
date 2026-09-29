@@ -1,4 +1,4 @@
-import type { Types } from 'mongoose';
+import type { Types, ClientSession } from 'mongoose';
 import { User, type IUser } from '../../models/User.js';
 import { Account, type IAccount } from '../../models/Account.js';
 // Aliased: `Role` is already the role-name union from the domain vocabulary.
@@ -88,10 +88,11 @@ export const memberService = {
   async addExistingAccount(
     organizationId: Types.ObjectId,
     account: IAccount,
-    membership: { role: Role; roleId?: Types.ObjectId }
+    membership: { role: Role; roleId?: Types.ObjectId },
+    session?: ClientSession
   ): Promise<IUser> {
     // Scoped by the plugin, so this asks "already in *this* organization".
-    if (await User.exists({ accountId: account._id })) {
+    if (await User.exists({ accountId: account._id }).session(session ?? null)) {
       throw AppError.conflict('This person is already a member of this organization.');
     }
 
@@ -100,15 +101,21 @@ export const memberService = {
     // refused everywhere. Resolved here rather than at each caller.
     const roleId =
       membership.roleId ??
-      (await RoleRecord.findOne({ name: membership.role }).select('_id').lean())?._id;
+      (await RoleRecord.findOne({ name: membership.role }).session(session ?? null).select('_id').lean())?._id;
 
-    return User.create({
+    const [user] = await User.create([{
       organizationId,
       accountId: account._id,
       ...membershipCopy(account),
       role: membership.role,
       roleId,
       permissions: [],
-    });
+    }], { session });
+
+    if (!user) {
+      throw new AppError('Failed to create user', 500);
+    }
+
+    return user;
   },
 };
