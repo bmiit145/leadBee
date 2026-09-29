@@ -10,6 +10,7 @@ import {
   TextInput,
   Alert,
   Share,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -45,9 +46,11 @@ import type { InviteRole, JoinRequest, OrganizationInvite } from '../../src/type
 type Pane = 'requests' | 'invitations';
 
 /**
- * Every way into the organization, on one screen: the shareable link with its
- * permissions, invitations by email, and the queue of people waiting to be let
- * in. Modelled on WhatsApp's "Group link" and GitHub's people settings.
+ * WhatsApp-style "Group link" invite hub.
+ *
+ * Provides a direct invite link, QR code, forward to WhatsApp, send via SMS,
+ * system share, reset link, and "Manage permissions" toggle.
+ * Also includes direct email invitations and pending join requests for enterprise management.
  */
 export default function InviteMembersScreen() {
   const { t } = useTranslation();
@@ -61,6 +64,7 @@ export default function InviteMembersScreen() {
   const [email, setEmail] = useState('');
   const [qrOpen, setQrOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
+  const [permissionsOpen, setPermissionsOpen] = useState(false);
   const [sentInvite, setSentInvite] = useState<{ email: string; url: string } | null>(null);
 
   // The drawer hides this destination from members, but deep links and
@@ -158,6 +162,29 @@ export default function InviteMembersScreen() {
     code: link?.code ?? '',
   });
 
+  const forwardWhatsApp = async () => {
+    const url = `whatsapp://send?text=${encodeURIComponent(shareText)}`;
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (supported) {
+        await Linking.openURL(url);
+      } else {
+        await share(shareText);
+      }
+    } catch {
+      await share(shareText);
+    }
+  };
+
+  const sendSMS = async () => {
+    const url = `sms:?body=${encodeURIComponent(shareText)}`;
+    try {
+      await Linking.openURL(url);
+    } catch {
+      await share(shareText);
+    }
+  };
+
   if (!canManageMembers) return null;
 
   const panes: SegmentedTab<Pane>[] = [
@@ -167,34 +194,49 @@ export default function InviteMembersScreen() {
 
   return (
     <View style={styles.screen}>
-      <ScreenHeader title={t('invites.title')} />
+      <ScreenHeader
+        title={t('invites.linkTitle')}
+        variant="white"
+        titleAlign="left"
+      />
 
       <ScrollView
         contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xl }}
         showsVerticalScrollIndicator={false}
       >
-        {/* Which organization this lets people into — the first thing to be sure of. */}
-        <View style={styles.orgCard}>
-          <Avatar name={organization?.name ?? '?'} size={46} variant="solid" />
-          <View style={styles.orgText}>
-            <Text style={styles.orgName} numberOfLines={1}>{organization?.name}</Text>
-            <Text style={styles.orgHint}>{t('invites.orgHint')}</Text>
+        {/* ─── Hero Group/Organization Card (WhatsApp Style) ─────────────── */}
+        <View style={styles.heroRow}>
+          <View style={styles.groupAvatar}>
+            <Ionicons name="people" size={28} color="#6750A4" />
+          </View>
+          <View style={styles.heroInfo}>
+            <Text style={styles.heroTitle} numberOfLines={1}>{organization?.name}</Text>
+            {link ? (
+              <Text
+                style={styles.heroLink}
+                numberOfLines={2}
+                selectable
+                onPress={() => copy(joinUrl)}
+              >
+                {joinUrl}
+              </Text>
+            ) : (
+              <Text style={styles.heroLinkPending}>{t('invites.noLink')}</Text>
+            )}
           </View>
         </View>
 
-        {/* ─── The shareable link ─────────────────────────────────────────── */}
-        <Text style={styles.sectionTitle}>{t('invites.linkTitle')}</Text>
+        <View style={styles.divider} />
 
+        {/* ─── Action Rows (WhatsApp Group link Style) ─────────────────────── */}
         {linkQuery.isLoading ? (
           <ActivityIndicator color={colors.primary} style={styles.loading} />
         ) : !link ? (
-          <View style={styles.card}>
-            <Text style={styles.emptyLink}>{t('invites.noLink')}</Text>
+          <View style={styles.emptyLinkCard}>
             <TouchableOpacity
               style={styles.primaryBtn}
               onPress={() => issueMutation.mutate()}
               disabled={issueMutation.isPending}
-              accessibilityRole="button"
             >
               {issueMutation.isPending ? (
                 <ActivityIndicator color="#FFFFFF" />
@@ -204,17 +246,34 @@ export default function InviteMembersScreen() {
             </TouchableOpacity>
           </View>
         ) : (
-          <View style={styles.card}>
-            <Text style={styles.code} selectable>{link.code}</Text>
-            <Text style={styles.url} numberOfLines={1} selectable>{joinUrl}</Text>
-
-            <View style={styles.divider} />
-
-            <LinkAction icon="copy-outline" label={t('invites.copyLink')} onPress={() => copy(joinUrl)} />
-            <LinkAction icon="share-social-outline" label={t('invites.shareLink')} onPress={() => share(shareText)} />
-            <LinkAction icon="qr-code-outline" label={t('invites.qrCode')} onPress={() => setQrOpen(true)} />
-            <LinkAction
-              icon="refresh-outline"
+          <View style={styles.actionsList}>
+            <ActionRow
+              icon="copy-outline"
+              label={t('invites.copyLink')}
+              onPress={() => copy(joinUrl)}
+            />
+            <ActionRow
+              icon="arrow-redo-outline"
+              label={t('invites.whatsappLink')}
+              onPress={forwardWhatsApp}
+            />
+            <ActionRow
+              icon="chatbox-outline"
+              label={t('invites.smsLink')}
+              onPress={sendSMS}
+            />
+            <ActionRow
+              icon="share-social-outline"
+              label={t('invites.shareLink')}
+              onPress={() => share(shareText)}
+            />
+            <ActionRow
+              icon="qr-code-outline"
+              label={t('invites.qrCode')}
+              onPress={() => setQrOpen(true)}
+            />
+            <ActionRow
+              icon="remove-circle-outline"
               label={t('invites.resetLink')}
               tone="danger"
               onPress={() => setResetOpen(true)}
@@ -222,54 +281,51 @@ export default function InviteMembersScreen() {
           </View>
         )}
 
-        {/* ─── Permissions, as WhatsApp words them ────────────────────────── */}
-        {link ? (
-          <>
-            <Text style={styles.sectionTitle}>{t('invites.permissionsTitle')}</Text>
-            <View style={styles.card}>
-              <View style={styles.settingRow}>
-                <View style={styles.settingText}>
-                  <Text style={styles.settingLabel}>{t('invites.approvalLabel')}</Text>
-                  <Text style={styles.settingHint}>{t('invites.approvalHint')}</Text>
-                </View>
-                <Switch
-                  value={link.requiresApproval}
-                  onValueChange={(value) => settingsMutation.mutate({ requiresApproval: value })}
-                  trackColor={{ true: colors.primary, false: colors.border }}
-                  thumbColor="#FFFFFF"
-                />
-              </View>
+        <View style={styles.sectionSpacer} />
 
-              <View style={styles.divider} />
+        {/* ─── Manage Permissions (WhatsApp Style) ────────────────────────── */}
+        <View style={styles.permissionsSection}>
+          <View style={styles.permissionsHeader}>
+            <Text style={styles.permissionsTitle}>{t('invites.permissionsTitle')}</Text>
+            {link ? (
+              <TouchableOpacity
+                style={styles.editPill}
+                onPress={() => setPermissionsOpen(true)}
+                accessibilityRole="button"
+              >
+                <Text style={styles.editPillText}>{t('invites.edit')}</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
 
-              <Text style={styles.settingLabel}>{t('invites.roleLabel')}</Text>
-              <Text style={styles.settingHint}>{t('invites.roleHint')}</Text>
-              <View style={styles.roleRow}>
-                {(['user', 'partner'] as InviteRole[]).map((role) => {
-                  const active = link.role === role;
-                  return (
-                    <TouchableOpacity
-                      key={role}
-                      style={[styles.roleChip, active && styles.roleChipActive]}
-                      onPress={() => settingsMutation.mutate({ role })}
-                      accessibilityRole="radio"
-                      accessibilityState={{ selected: active }}
-                    >
-                      <Text style={[styles.roleChipText, active && styles.roleChipTextActive]}>
-                        {t(`invites.roles.${role}`)}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+          <View style={styles.permissionSubItem}>
+            <View style={styles.permissionIconWrap}>
+              <Ionicons name="alert-circle-outline" size={22} color="#54656F" />
             </View>
-          </>
-        ) : null}
+            <Text style={styles.permissionSubText}>
+              {link?.requiresApproval
+                ? t('invites.approvalRequired')
+                : t('invites.noApprovalRequired')}
+            </Text>
+          </View>
 
-        {/* ─── One person, by email ───────────────────────────────────────── */}
-        <Text style={styles.sectionTitle}>{t('invites.emailTitle')}</Text>
-        <View style={styles.card}>
-          <Text style={styles.settingHint}>{t('invites.emailHint')}</Text>
+          <View style={styles.permissionSubItem}>
+            <View style={styles.permissionIconWrap}>
+              <Ionicons name="people-outline" size={22} color="#54656F" />
+            </View>
+            <Text style={styles.permissionSubText}>
+              {t('invites.membersAccess') +
+                (link?.role ? ` • ${t('invites.roleAssigned', { role: t(`invites.roles.${link.role}`) })}` : '')}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.sectionSpacer} />
+
+        {/* ─── Direct Email Invitations (Enterprise Feature) ─────────────── */}
+        <View style={styles.enterpriseSection}>
+          <Text style={styles.enterpriseSectionTitle}>{t('invites.emailTitle')}</Text>
+          <Text style={styles.enterpriseHint}>{t('invites.emailHint')}</Text>
           <View style={styles.emailRow}>
             <TextInput
               value={email}
@@ -298,53 +354,106 @@ export default function InviteMembersScreen() {
           </View>
         </View>
 
-        {/* ─── Waiting on an admin ────────────────────────────────────────── */}
-        <Text style={styles.sectionTitle}>{t('invites.pendingTitle')}</Text>
-        <View style={styles.paneTabs}>
-          <SegmentedTabs tabs={panes} value={pane} onChange={setPane} />
-        </View>
+        {/* ─── Waiting on Admin Queue (Enterprise Feature) ────────────────── */}
+        <View style={styles.enterpriseSection}>
+          <Text style={styles.enterpriseSectionTitle}>{t('invites.pendingTitle')}</Text>
+          <View style={styles.paneTabs}>
+            <SegmentedTabs tabs={panes} value={pane} onChange={setPane} />
+          </View>
 
-        {pane === 'requests' ? (
-          requestsQuery.isLoading ? (
+          {pane === 'requests' ? (
+            requestsQuery.isLoading ? (
+              <ActivityIndicator color={colors.primary} style={styles.loading} />
+            ) : (requestsQuery.data?.data ?? []).length === 0 ? (
+              <EmptyState
+                icon="people-outline"
+                title={t('invites.noRequests')}
+                message={t('invites.noRequestsHint')}
+              />
+            ) : (
+              (requestsQuery.data?.data ?? []).map((request) => (
+                <RequestRow
+                  key={request._id}
+                  request={request}
+                  busy={decideMutation.isPending}
+                  onDecide={(decision) => decideMutation.mutate({ id: request._id, decision })}
+                />
+              ))
+            )
+          ) : invitesQuery.isLoading ? (
             <ActivityIndicator color={colors.primary} style={styles.loading} />
-          ) : (requestsQuery.data?.data ?? []).length === 0 ? (
+          ) : (invitesQuery.data?.data ?? []).length === 0 ? (
             <EmptyState
-              icon="people-outline"
-              title={t('invites.noRequests')}
-              message={t('invites.noRequestsHint')}
+              icon="mail-outline"
+              title={t('invites.noInvites')}
+              message={t('invites.noInvitesHint')}
             />
           ) : (
-            (requestsQuery.data?.data ?? []).map((request) => (
-              <RequestRow
-                key={request._id}
-                request={request}
-                busy={decideMutation.isPending}
-                onDecide={(decision) => decideMutation.mutate({ id: request._id, decision })}
+            (invitesQuery.data?.data ?? []).map((invite) => (
+              <InviteRow
+                key={invite._id}
+                invite={invite}
+                busy={revokeMutation.isPending}
+                onRevoke={() => revokeMutation.mutate(invite._id)}
               />
             ))
-          )
-        ) : invitesQuery.isLoading ? (
-          <ActivityIndicator color={colors.primary} style={styles.loading} />
-        ) : (invitesQuery.data?.data ?? []).length === 0 ? (
-          <EmptyState
-            icon="mail-outline"
-            title={t('invites.noInvites')}
-            message={t('invites.noInvitesHint')}
-          />
-        ) : (
-          (invitesQuery.data?.data ?? []).map((invite) => (
-            <InviteRow
-              key={invite._id}
-              invite={invite}
-              busy={revokeMutation.isPending}
-              onRevoke={() => revokeMutation.mutate(invite._id)}
-            />
-          ))
-        )}
-
+          )}
+        </View>
       </ScrollView>
 
-      {/* ─── QR code, for handing the link over in person ──────────────────── */}
+      {/* ─── Manage Permissions Dialog ──────────────────────────────────── */}
+      <CenterDialog
+        visible={permissionsOpen}
+        onDismiss={() => setPermissionsOpen(false)}
+        title={t('invites.permissionsTitle')}
+      >
+        <View style={styles.modalContent}>
+          <View style={styles.modalRow}>
+            <View style={styles.settingText}>
+              <Text style={styles.modalLabel}>{t('invites.approvalLabel')}</Text>
+              <Text style={styles.modalHint}>{t('invites.approvalHint')}</Text>
+            </View>
+            <Switch
+              value={link?.requiresApproval ?? true}
+              onValueChange={(value) => settingsMutation.mutate({ requiresApproval: value })}
+              trackColor={{ true: colors.primary, false: colors.border }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+
+          <View style={styles.modalDivider} />
+
+          <Text style={styles.modalLabel}>{t('invites.roleLabel')}</Text>
+          <Text style={styles.modalHint}>{t('invites.roleHint')}</Text>
+          <View style={styles.roleRow}>
+            {(['user', 'partner'] as InviteRole[]).map((role) => {
+              const active = (link?.role ?? 'user') === role;
+              return (
+                <TouchableOpacity
+                  key={role}
+                  style={[styles.roleChip, active && styles.roleChipActive]}
+                  onPress={() => settingsMutation.mutate({ role })}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: active }}
+                >
+                  <Text style={[styles.roleChipText, active && styles.roleChipTextActive]}>
+                    {t(`invites.roles.${role}`)}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <TouchableOpacity
+            style={[styles.primaryBtn, { marginTop: spacing.lg }]}
+            onPress={() => setPermissionsOpen(false)}
+          >
+            <Text style={styles.primaryBtnText}>{t('common.ok')}</Text>
+          </TouchableOpacity>
+        </View>
+      </CenterDialog>
+
+      {/* ─── QR Code Modal ──────────────────────────────────────────────── */}
       <CenterDialog visible={qrOpen} onDismiss={() => setQrOpen(false)} title={t('invites.qrTitle')}>
         <View style={styles.qrWrap}>
           {joinUrl ? <QRCode value={joinUrl} size={196} backgroundColor="#FFFFFF" /> : null}
@@ -356,6 +465,7 @@ export default function InviteMembersScreen() {
         </TouchableOpacity>
       </CenterDialog>
 
+      {/* ─── Reset Link Confirm Dialog ──────────────────────────────────── */}
       <ConfirmDialog
         visible={resetOpen}
         onCancel={() => setResetOpen(false)}
@@ -371,7 +481,7 @@ export default function InviteMembersScreen() {
         loading={issueMutation.isPending}
       />
 
-      {/* The invitation link is shown once — the server keeps only its hash. */}
+      {/* ─── Single-use Invite Sent Modal ───────────────────────────────── */}
       <CenterDialog
         visible={!!sentInvite}
         onDismiss={() => setSentInvite(null)}
@@ -401,7 +511,7 @@ export default function InviteMembersScreen() {
   );
 }
 
-function LinkAction({
+function ActionRow({
   icon,
   label,
   onPress,
@@ -412,11 +522,20 @@ function LinkAction({
   onPress: () => void;
   tone?: 'danger';
 }) {
-  const color = tone === 'danger' ? colors.error : colors.text;
+  const isDanger = tone === 'danger';
+  const color = isDanger ? '#EA0038' : '#1A1A1A';
+  const iconColor = isDanger ? '#EA0038' : '#54656F';
   return (
-    <TouchableOpacity style={styles.linkAction} onPress={onPress} accessibilityRole="button">
-      <Ionicons name={icon} size={20} color={color} />
-      <Text style={[styles.linkActionText, { color }]}>{label}</Text>
+    <TouchableOpacity
+      style={styles.actionRow}
+      onPress={onPress}
+      accessibilityRole="button"
+      activeOpacity={0.7}
+    >
+      <View style={styles.actionIconWrap}>
+        <Ionicons name={icon} size={23} color={iconColor} />
+      </View>
+      <Text style={[styles.actionLabel, { color }]}>{label}</Text>
     </TouchableOpacity>
   );
 }
@@ -513,56 +632,130 @@ function InviteRow({
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.background },
+  screen: { flex: 1, backgroundColor: '#FFFFFF' },
   loading: { marginVertical: spacing.lg },
-  orgCard: {
+  heroRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    margin: spacing.md,
-    padding: spacing.md,
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
+    paddingHorizontal: 16,
+    paddingVertical: 18,
+    backgroundColor: '#FFFFFF',
   },
-  orgText: { flex: 1, minWidth: 0 },
-  orgName: { fontSize: 16.5, fontWeight: '800', color: colors.text },
-  orgHint: { fontSize: 12.5, color: colors.textSecondary, marginTop: 2 },
-  sectionTitle: {
-    fontSize: 12.5,
-    fontWeight: '800',
+  groupAvatar: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: '#ECE6F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroInfo: { flex: 1, minWidth: 0, marginLeft: 16 },
+  heroTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A1A' },
+  heroLink: {
+    fontSize: 14,
+    color: '#008069',
+    marginTop: 4,
+    lineHeight: 19,
+  },
+  heroLinkPending: {
+    fontSize: 13.5,
     color: colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginHorizontal: spacing.md + 4,
-    marginTop: spacing.lg,
-    marginBottom: spacing.xs,
+    marginTop: 4,
   },
-  card: {
-    marginHorizontal: spacing.md,
-    padding: spacing.md,
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#E0E0E0',
   },
-  code: {
-    fontSize: 26,
-    fontWeight: '800',
-    letterSpacing: 3,
-    color: colors.text,
-    textAlign: 'center',
+  actionsList: {
+    backgroundColor: '#FFFFFF',
   },
-  url: { fontSize: 12.5, color: colors.primary, textAlign: 'center', marginTop: 4 },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginVertical: spacing.md },
-  linkAction: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 13 },
-  linkActionText: { fontSize: 15.5 },
-  emptyLink: { fontSize: 14, color: colors.textSecondary, textAlign: 'center', marginBottom: spacing.md },
-  settingRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  actionIconWrap: {
+    width: 32,
+    alignItems: 'flex-start',
+    marginRight: 16,
+  },
+  actionLabel: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  sectionSpacer: {
+    height: 10,
+    backgroundColor: '#F7F7F8',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: '#ECECEC',
+  },
+  permissionsSection: {
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    backgroundColor: '#FFFFFF',
+  },
+  permissionsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  permissionsTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1A1A1A',
+  },
+  editPill: {
+    backgroundColor: '#F0F2F5',
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+  },
+  editPillText: {
+    fontSize: 13.5,
+    fontWeight: '700',
+    color: '#1A1A1A',
+  },
+  permissionSubItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 8,
+  },
+  permissionIconWrap: {
+    width: 32,
+    alignItems: 'flex-start',
+    marginRight: 16,
+    marginTop: 2,
+  },
+  permissionSubText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#54656F',
+    lineHeight: 20,
+  },
+  emptyLinkCard: {
+    padding: spacing.lg,
+    alignItems: 'center',
+  },
+  modalContent: {
+    paddingVertical: spacing.sm,
+  },
+  modalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
   settingText: { flex: 1, minWidth: 0 },
-  settingLabel: { fontSize: 15, fontWeight: '700', color: colors.text },
-  settingHint: { fontSize: 12.5, color: colors.textSecondary, marginTop: 2, lineHeight: 18 },
+  modalLabel: { fontSize: 15, fontWeight: '700', color: colors.text },
+  modalHint: { fontSize: 12.5, color: colors.textSecondary, marginTop: 2, lineHeight: 18 },
+  modalDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+    marginVertical: spacing.md,
+  },
   roleRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
   roleChip: {
     paddingHorizontal: 14,
@@ -574,16 +767,40 @@ const styles = StyleSheet.create({
   roleChipActive: { borderColor: colors.primary, backgroundColor: `${colors.primary}12` },
   roleChipText: { fontSize: 13.5, fontWeight: '700', color: colors.textSecondary },
   roleChipTextActive: { color: colors.primary },
-  emailRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.sm },
+  enterpriseSection: {
+    paddingHorizontal: 16,
+    paddingTop: 18,
+    paddingBottom: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  enterpriseSectionTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1A1A1A',
+    marginBottom: 4,
+  },
+  enterpriseHint: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    marginBottom: 10,
+    lineHeight: 18,
+  },
+  emailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
   emailInput: {
     flex: 1,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: borderRadius.lg,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     paddingVertical: 10,
     fontSize: 14.5,
     color: colors.text,
+    backgroundColor: colors.surface,
   },
   sendBtn: {
     width: 44,
@@ -594,13 +811,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   sendBtnOff: { opacity: 0.4 },
-  paneTabs: { paddingHorizontal: spacing.md, marginBottom: spacing.sm },
+  paneTabs: { marginBottom: spacing.sm },
   pendingCard: {
-    marginHorizontal: spacing.md,
     marginBottom: 10,
     padding: spacing.md,
     backgroundColor: colors.surface,
-    borderRadius: borderRadius.xl,
+    borderRadius: borderRadius.lg,
     borderWidth: 1,
     borderColor: colors.border,
     gap: 8,
@@ -617,7 +833,7 @@ const styles = StyleSheet.create({
   pendingName: { fontSize: 15, fontWeight: '700', color: colors.text },
   pendingMeta: { fontSize: 12.5, color: colors.textSecondary },
   pendingMessage: { fontSize: 13.5, color: colors.text, fontStyle: 'italic' },
-  pendingActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  pendingActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: 4 },
   pendingBtn: { flex: 1 },
   expiry: { flex: 1 },
   revokeBtn: { borderColor: `${colors.error}55`, paddingHorizontal: 16 },
@@ -633,11 +849,11 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: colors.border,
     borderRadius: borderRadius.full,
-    paddingVertical: 12,
+    paddingVertical: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  outlineBtnText: { fontSize: 14.5, fontWeight: '700', color: colors.text },
+  outlineBtnText: { fontSize: 14, fontWeight: '700', color: colors.text },
   qrWrap: {
     alignSelf: 'center',
     padding: spacing.md,

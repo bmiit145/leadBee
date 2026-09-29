@@ -9,6 +9,9 @@ import { isSupportedCountry, type CountryCode } from 'libphonenumber-js/max';
  */
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  // Vercel's system environment marker. A serverless runtime must use stdout
+  // JSON logs even if NODE_ENV was accidentally configured as development.
+  VERCEL: z.string().optional(),
   PORT: z.coerce.number().int().positive().default(4000),
   HOST: z.string().default('0.0.0.0'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
@@ -107,6 +110,7 @@ export const env = {
   isProduction: raw.NODE_ENV === 'production',
   isDevelopment: raw.NODE_ENV === 'development',
   isTest: raw.NODE_ENV === 'test',
+  isVercel: raw.VERCEL === '1',
   corsOrigins: raw.CORS_ORIGINS.split(',')
     .map((o) => o.trim())
     .filter(Boolean),

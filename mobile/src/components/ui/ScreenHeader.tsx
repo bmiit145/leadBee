@@ -15,6 +15,8 @@ export interface HeaderAction {
 
 interface Props {
   title: string;
+  variant?: 'primary' | 'white';
+  titleAlign?: 'center' | 'left';
   /** Left affordance. `back` pops the stack, `menu` opens a drawer. */
   leading?: 'back' | 'menu' | 'none';
   onLeadingPress?: () => void;
@@ -29,7 +31,7 @@ interface Props {
 }
 
 /**
- * The primary-coloured top bar on every pushed screen.
+ * The top bar on every pushed screen.
  *
  * Previously each screen re-declared its own header markup and styles (11
  * copies of the same title style alone), so titles and icon buttons drifted
@@ -37,6 +39,8 @@ interface Props {
  */
 export function ScreenHeader({
   title,
+  variant = 'primary',
+  titleAlign = 'center',
   leading = 'back',
   onLeadingPress,
   actions = [],
@@ -57,12 +61,13 @@ export function ScreenHeader({
   };
 
   const hasTrailing = actions.length > 0 || menuItems.length > 0;
-
-  const leadingIcon = leading === 'menu' ? 'menu' : 'chevron-back';
+  const isWhite = variant === 'white';
+  const iconColor = isWhite ? colors.text : '#FFFFFF';
+  const leadingIcon = leading === 'menu' ? 'menu' : isWhite ? 'arrow-back' : 'chevron-back';
   const handleLeading = onLeadingPress ?? (() => router.back());
 
   return (
-    <View style={[styles.bar, { paddingTop: insets.top + 10 }]}>
+    <View style={[isWhite ? styles.barWhite : styles.bar, { paddingTop: insets.top + 10 }]}>
       <View style={styles.row}>
         {leading === 'none' ? (
           <View style={styles.btn} />
@@ -73,16 +78,27 @@ export function ScreenHeader({
             accessibilityRole="button"
             accessibilityLabel={leading === 'menu' ? 'Open menu' : 'Go back'}
           >
-            <Ionicons name={leadingIcon as any} size={leading === 'menu' ? 24 : 22} color="#FFFFFF" />
+            <Ionicons name={leadingIcon as any} size={leading === 'menu' ? 24 : 22} color={iconColor} />
           </TouchableOpacity>
         )}
 
-        <Text style={styles.title} numberOfLines={1}>{title}</Text>
+        <Text
+          style={[
+            styles.title,
+            isWhite && styles.titleDark,
+            titleAlign === 'left' && styles.titleLeft,
+          ]}
+          numberOfLines={1}
+        >
+          {title}
+        </Text>
 
         {/* Keeps the title optically centred when there are no actions. */}
-        {!hasTrailing ? (
+        {!hasTrailing && titleAlign === 'center' ? (
           <View style={styles.btn} />
-        ) : (
+        ) : null}
+
+        {hasTrailing && (
           <View style={styles.actions}>
             {actions.map((a) => (
               <TouchableOpacity
@@ -92,7 +108,7 @@ export function ScreenHeader({
                 accessibilityRole="button"
                 accessibilityLabel={a.accessibilityLabel}
               >
-                <Ionicons name={a.icon as any} size={23} color="#FFFFFF" />
+                <Ionicons name={a.icon as any} size={23} color={iconColor} />
               </TouchableOpacity>
             ))}
             {menuItems.length > 0 ? (
@@ -103,7 +119,7 @@ export function ScreenHeader({
                 accessibilityRole="button"
                 accessibilityLabel={t('common.moreOptions')}
               >
-                <Ionicons name="ellipsis-vertical" size={21} color="#FFFFFF" />
+                <Ionicons name="ellipsis-vertical" size={21} color={iconColor} />
               </TouchableOpacity>
             ) : null}
           </View>
@@ -126,6 +142,12 @@ export function ScreenHeader({
 
 const styles = StyleSheet.create({
   bar: { backgroundColor: colors.primary, paddingBottom: spacing.sm },
+  barWhite: {
+    backgroundColor: '#FFFFFF',
+    paddingBottom: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -135,5 +157,7 @@ const styles = StyleSheet.create({
   },
   btn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   title: { flex: 1, fontSize: 19, fontWeight: '700', color: '#FFFFFF', textAlign: 'center' },
+  titleDark: { color: colors.text, fontWeight: '600' },
+  titleLeft: { textAlign: 'left', marginLeft: 8 },
   actions: { flexDirection: 'row', alignItems: 'center' },
 });

@@ -1,5 +1,6 @@
 import pino from 'pino';
 import { env } from '../config/env.js';
+import { shouldUsePrettyTransport } from './loggerPolicy.js';
 
 /**
  * Structured logs. In development they are pretty-printed; in production they
@@ -27,9 +28,8 @@ export const logger = pino({
     ],
     censor: '[redacted]',
   },
-  ...(env.isProduction
-    ? {}
-    : {
+  ...(shouldUsePrettyTransport(env.isDevelopment, env.isVercel)
+    ? {
         transport: {
           target: 'pino-pretty',
           options: {
@@ -38,5 +38,6 @@ export const logger = pino({
             ignore: 'pid,hostname',
           },
         },
-      }),
+      }
+    : {}),
 });
