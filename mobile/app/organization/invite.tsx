@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
-  Switch,
   TextInput,
   Alert,
   Share,
@@ -41,7 +40,7 @@ import { useAuth } from '../../src/stores/auth.store';
 import { formatDate } from '../../src/utils/format';
 import { isValidEmail } from '../../src/utils/validators';
 import { tapFeedback, warningFeedback } from '../../src/utils/haptics';
-import type { InviteRole, JoinRequest, OrganizationInvite } from '../../src/types';
+import type { JoinRequest, OrganizationInvite } from '../../src/types';
 
 type Pane = 'requests' | 'invitations';
 
@@ -49,8 +48,7 @@ type Pane = 'requests' | 'invitations';
  * WhatsApp-style "Group link" invite hub.
  *
  * Provides a direct invite link, QR code, forward to WhatsApp, send via SMS,
- * system share, reset link, and "Manage permissions" toggle.
- * Also includes direct email invitations and pending join requests for enterprise management.
+ * system share, reset link, direct email invitations and pending join requests.
  */
 export default function InviteMembersScreen() {
   const { t } = useTranslation();
@@ -64,7 +62,6 @@ export default function InviteMembersScreen() {
   const [email, setEmail] = useState('');
   const [qrOpen, setQrOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
-  const [permissionsOpen, setPermissionsOpen] = useState(false);
   const [sentInvite, setSentInvite] = useState<{ email: string; url: string } | null>(null);
 
   // The drawer hides this destination from members, but deep links and
@@ -104,13 +101,6 @@ export default function InviteMembersScreen() {
       tapFeedback();
       refresh();
     },
-    onError: fail,
-  });
-
-  const settingsMutation = useMutation({
-    mutationFn: (settings: { requiresApproval?: boolean; role?: InviteRole }) =>
-      inviteService.updateLink(settings),
-    onSuccess: () => refresh(),
     onError: fail,
   });
 
@@ -283,45 +273,6 @@ export default function InviteMembersScreen() {
 
         <View style={styles.sectionSpacer} />
 
-        {/* ─── Manage Permissions (WhatsApp Style) ────────────────────────── */}
-        <View style={styles.permissionsSection}>
-          <View style={styles.permissionsHeader}>
-            <Text style={styles.permissionsTitle}>{t('invites.permissionsTitle')}</Text>
-            {link ? (
-              <TouchableOpacity
-                style={styles.editPill}
-                onPress={() => setPermissionsOpen(true)}
-                accessibilityRole="button"
-              >
-                <Text style={styles.editPillText}>{t('invites.edit')}</Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-
-          <View style={styles.permissionSubItem}>
-            <View style={styles.permissionIconWrap}>
-              <Ionicons name="alert-circle-outline" size={22} color="#54656F" />
-            </View>
-            <Text style={styles.permissionSubText}>
-              {link?.requiresApproval
-                ? t('invites.approvalRequired')
-                : t('invites.noApprovalRequired')}
-            </Text>
-          </View>
-
-          <View style={styles.permissionSubItem}>
-            <View style={styles.permissionIconWrap}>
-              <Ionicons name="people-outline" size={22} color="#54656F" />
-            </View>
-            <Text style={styles.permissionSubText}>
-              {t('invites.membersAccess') +
-                (link?.role ? ` • ${t('invites.roleAssigned', { role: t(`invites.roles.${link.role}`) })}` : '')}
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.sectionSpacer} />
-
         {/* ─── Direct Email Invitations (Enterprise Feature) ─────────────── */}
         <View style={styles.enterpriseSection}>
           <Text style={styles.enterpriseSectionTitle}>{t('invites.emailTitle')}</Text>
@@ -400,58 +351,6 @@ export default function InviteMembersScreen() {
           )}
         </View>
       </ScrollView>
-
-      {/* ─── Manage Permissions Dialog ──────────────────────────────────── */}
-      <CenterDialog
-        visible={permissionsOpen}
-        onDismiss={() => setPermissionsOpen(false)}
-        title={t('invites.permissionsTitle')}
-      >
-        <View style={styles.modalContent}>
-          <View style={styles.modalRow}>
-            <View style={styles.settingText}>
-              <Text style={styles.modalLabel}>{t('invites.approvalLabel')}</Text>
-              <Text style={styles.modalHint}>{t('invites.approvalHint')}</Text>
-            </View>
-            <Switch
-              value={link?.requiresApproval ?? true}
-              onValueChange={(value) => settingsMutation.mutate({ requiresApproval: value })}
-              trackColor={{ true: colors.primary, false: colors.border }}
-              thumbColor="#FFFFFF"
-            />
-          </View>
-
-          <View style={styles.modalDivider} />
-
-          <Text style={styles.modalLabel}>{t('invites.roleLabel')}</Text>
-          <Text style={styles.modalHint}>{t('invites.roleHint')}</Text>
-          <View style={styles.roleRow}>
-            {(['user', 'partner'] as InviteRole[]).map((role) => {
-              const active = (link?.role ?? 'user') === role;
-              return (
-                <TouchableOpacity
-                  key={role}
-                  style={[styles.roleChip, active && styles.roleChipActive]}
-                  onPress={() => settingsMutation.mutate({ role })}
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected: active }}
-                >
-                  <Text style={[styles.roleChipText, active && styles.roleChipTextActive]}>
-                    {t(`invites.roles.${role}`)}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          <TouchableOpacity
-            style={[styles.primaryBtn, { marginTop: spacing.lg }]}
-            onPress={() => setPermissionsOpen(false)}
-          >
-            <Text style={styles.primaryBtnText}>{t('common.ok')}</Text>
-          </TouchableOpacity>
-        </View>
-      </CenterDialog>
 
       {/* ─── QR Code Modal ──────────────────────────────────────────────── */}
       <CenterDialog visible={qrOpen} onDismiss={() => setQrOpen(false)} title={t('invites.qrTitle')}>
@@ -650,6 +549,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   heroInfo: { flex: 1, minWidth: 0, marginLeft: 16 },
+  settingText: { flex: 1, minWidth: 0 },
   heroTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A1A' },
   heroLink: {
     fontSize: 14,
@@ -691,82 +591,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: '#ECECEC',
   },
-  permissionsSection: {
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    backgroundColor: '#FFFFFF',
-  },
-  permissionsHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 14,
-  },
-  permissionsTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#1A1A1A',
-  },
-  editPill: {
-    backgroundColor: '#F0F2F5',
-    borderRadius: 18,
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-  },
-  editPillText: {
-    fontSize: 13.5,
-    fontWeight: '700',
-    color: '#1A1A1A',
-  },
-  permissionSubItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    paddingVertical: 8,
-  },
-  permissionIconWrap: {
-    width: 32,
-    alignItems: 'flex-start',
-    marginRight: 16,
-    marginTop: 2,
-  },
-  permissionSubText: {
-    flex: 1,
-    fontSize: 14,
-    color: '#54656F',
-    lineHeight: 20,
-  },
   emptyLinkCard: {
     padding: spacing.lg,
     alignItems: 'center',
   },
-  modalContent: {
-    paddingVertical: spacing.sm,
-  },
-  modalRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  settingText: { flex: 1, minWidth: 0 },
-  modalLabel: { fontSize: 15, fontWeight: '700', color: colors.text },
-  modalHint: { fontSize: 12.5, color: colors.textSecondary, marginTop: 2, lineHeight: 18 },
-  modalDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: colors.border,
-    marginVertical: spacing.md,
-  },
-  roleRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
-  roleChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: borderRadius.full,
-    borderWidth: 1.5,
-    borderColor: colors.border,
-  },
-  roleChipActive: { borderColor: colors.primary, backgroundColor: `${colors.primary}12` },
-  roleChipText: { fontSize: 13.5, fontWeight: '700', color: colors.textSecondary },
-  roleChipTextActive: { color: colors.primary },
   enterpriseSection: {
     paddingHorizontal: 16,
     paddingTop: 18,
