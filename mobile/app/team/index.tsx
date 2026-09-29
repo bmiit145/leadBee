@@ -237,18 +237,11 @@ export default function TeamScreen() {
         title={t('team.title')}
         actions={
           canManageTeam
-            ? [
-                {
-                  icon: 'link-outline',
-                  onPress: () => router.push('/organization/invite'),
-                  accessibilityLabel: t('invites.title'),
-                },
-                {
-                  icon: 'person-add-outline',
-                  onPress: () => router.push('/team/form'),
-                  accessibilityLabel: t('team.addMember'),
-                },
-              ]
+            ? [{
+                icon: 'person-add-outline',
+                onPress: () => router.push('/team/form'),
+                accessibilityLabel: t('team.addMember'),
+              }]
             : []
         }
       />

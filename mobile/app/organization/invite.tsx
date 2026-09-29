@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -54,7 +54,8 @@ export default function InviteMembersScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
-  const { organization } = useAuth();
+  const { organization, hasPermission } = useAuth();
+  const canManageMembers = hasPermission('users.manage');
 
   const [pane, setPane] = useState<Pane>('requests');
   const [email, setEmail] = useState('');
@@ -62,17 +63,26 @@ export default function InviteMembersScreen() {
   const [resetOpen, setResetOpen] = useState(false);
   const [sentInvite, setSentInvite] = useState<{ email: string; url: string } | null>(null);
 
+  // The drawer hides this destination from members, but deep links and
+  // notifications can still open a file-based route directly.
+  useEffect(() => {
+    if (!canManageMembers) router.replace('/(leads)');
+  }, [canManageMembers, router]);
+
   const linkQuery = useQuery({
     queryKey: queryKeys.invites.link,
     queryFn: inviteService.getLink,
+    enabled: canManageMembers,
   });
   const requestsQuery = useQuery({
     queryKey: queryKeys.invites.requests('pending'),
     queryFn: () => inviteService.listRequests('pending'),
+    enabled: canManageMembers,
   });
   const invitesQuery = useQuery({
     queryKey: queryKeys.invites.list('pending'),
     queryFn: () => inviteService.listInvites('pending'),
+    enabled: canManageMembers,
   });
 
   const link = linkQuery.data;
@@ -147,6 +157,8 @@ export default function InviteMembersScreen() {
     url: joinUrl,
     code: link?.code ?? '',
   });
+
+  if (!canManageMembers) return null;
 
   const panes: SegmentedTab<Pane>[] = [
     { value: 'requests', label: t('invites.tabs.requests'), count: requestsQuery.data?.total ?? 0 },
