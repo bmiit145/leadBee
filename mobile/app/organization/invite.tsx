@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import * as Clipboard from 'expo-clipboard';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as MediaLibrary from 'expo-media-library';
 import QRCode from 'react-native-qrcode-svg';
 import { colors, spacing, borderRadius } from '../../src/theme';
 import {
@@ -28,6 +30,7 @@ import {
   SegmentedTabs,
   EmptyState,
 } from '../../src/components/ui';
+import { InlineFeedback } from '../../src/components/ui/InlineFeedback';
 import type { SegmentedTab } from '../../src/components/ui';
 import { queryKeys } from '../../src/lib/queryKeys';
 import {
@@ -43,6 +46,12 @@ import { tapFeedback, warningFeedback } from '../../src/utils/haptics';
 import type { JoinRequest, OrganizationInvite } from '../../src/types';
 
 type Pane = 'requests' | 'invitations';
+type QrCodeHandle = { toDataURL: (callback: (data: string) => void) => void };
+type QrSaveFeedback =
+  | { kind: 'success' }
+  | { kind: 'error' }
+  | { kind: 'permission'; canAskAgain: boolean }
+  | null;
 
 /**
  * WhatsApp-style "Group link" invite hub.
@@ -61,8 +70,11 @@ export default function InviteMembersScreen() {
   const [pane, setPane] = useState<Pane>('requests');
   const [email, setEmail] = useState('');
   const [qrOpen, setQrOpen] = useState(false);
+  const [qrSavePending, setQrSavePending] = useState(false);
+  const [qrSaveFeedback, setQrSaveFeedback] = useState<QrSaveFeedback>(null);
   const [resetOpen, setResetOpen] = useState(false);
   const [sentInvite, setSentInvite] = useState<{ email: string; url: string } | null>(null);
+  const qrRef = useRef<QrCodeHandle | null>(null);
 
   // The drawer hides this destination from members, but deep links and
   // notifications can still open a file-based route directly.
@@ -146,6 +158,54 @@ export default function InviteMembersScreen() {
     Alert.alert(t('invites.copied'));
   };
 
+  const saveQrToGallery = async () => {
+    if (!qrRef.current || !joinUrl || qrSavePending) return;
+
+    setQrSaveFeedback(null);
+    setQrSavePending(true);
+    let fileUri: string | undefined;
+    try {
+      const permission = await MediaLibrary.requestPermissionsAsync(true);
+      if (!permission.granted) {
+        warningFeedback();
+        setQrSaveFeedback({ kind: 'permission', canAskAgain: permission.canAskAgain });
+        return;
+      }
+
+      const dataUrl = await new Promise<string>((resolve) => {
+        qrRef.current?.toDataURL(resolve);
+      });
+      if (!FileSystem.cacheDirectory) throw new Error('File cache is unavailable');
+      fileUri = `${FileSystem.cacheDirectory}leadbee-invite-qr-${Date.now()}.png`;
+      await FileSystem.writeAsStringAsync(fileUri, dataUrl, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      await MediaLibrary.createAssetAsync(fileUri);
+      tapFeedback();
+      setQrSaveFeedback({ kind: 'success' });
+    } catch {
+      warningFeedback();
+      setQrSaveFeedback({ kind: 'error' });
+    } finally {
+      try {
+        if (fileUri) await FileSystem.deleteAsync(fileUri, { idempotent: true });
+      } catch {
+        // Temporary-file cleanup must not replace the save result shown to the user.
+      } finally {
+        setQrSavePending(false);
+      }
+    }
+  };
+
+  const openPermissionSettings = async () => {
+    try {
+      await Linking.openSettings();
+    } catch {
+      warningFeedback();
+      setQrSaveFeedback({ kind: 'error' });
+    }
+  };
+
   const shareText = t('invites.shareMessage', {
     organization: organization?.name ?? '',
     url: joinUrl,
@@ -223,15 +283,31 @@ export default function InviteMembersScreen() {
           <ActivityIndicator color={colors.primary} style={styles.loading} />
         ) : !link ? (
           <View style={styles.emptyLinkCard}>
+            <View style={styles.emptyLinkHeader}>
+              <View style={styles.emptyLinkIcon}>
+                <Ionicons name="link-outline" size={22} color={colors.primary} />
+              </View>
+              <View style={styles.emptyLinkCopy}>
+                <Text style={styles.emptyLinkTitle}>{t('invites.createLink')}</Text>
+                <Text style={styles.emptyLinkHint}>{t('invites.noLink')}</Text>
+              </View>
+            </View>
             <TouchableOpacity
-              style={styles.primaryBtn}
+              style={[styles.primaryBtn, issueMutation.isPending && styles.primaryBtnDisabled]}
               onPress={() => issueMutation.mutate()}
               disabled={issueMutation.isPending}
+              accessibilityRole="button"
+              accessibilityLabel={t('invites.createLink')}
+              accessibilityState={{ busy: issueMutation.isPending, disabled: issueMutation.isPending }}
+              activeOpacity={0.82}
             >
               {issueMutation.isPending ? (
-                <ActivityIndicator color="#FFFFFF" />
+                <ActivityIndicator color="#FFFFFF" size="small" />
               ) : (
-                <Text style={styles.primaryBtnText}>{t('invites.createLink')}</Text>
+                <View style={styles.primaryBtnContent}>
+                  <Ionicons name="add-circle-outline" size={18} color="#FFFFFF" />
+                  <Text style={styles.primaryBtnText}>{t('invites.createLink')}</Text>
+                </View>
               )}
             </TouchableOpacity>
           </View>
@@ -355,13 +431,77 @@ export default function InviteMembersScreen() {
       {/* ─── QR Code Modal ──────────────────────────────────────────────── */}
       <CenterDialog visible={qrOpen} onDismiss={() => setQrOpen(false)} title={t('invites.qrTitle')}>
         <View style={styles.qrWrap}>
-          {joinUrl ? <QRCode value={joinUrl} size={196} backgroundColor="#FFFFFF" /> : null}
+          {joinUrl ? (
+            <QRCode
+              value={joinUrl}
+              size={196}
+              backgroundColor="#FFFFFF"
+              getRef={(ref) => {
+                qrRef.current = ref as unknown as QrCodeHandle | null;
+              }}
+            />
+          ) : null}
         </View>
         <Text style={styles.qrCode} selectable>{link?.code}</Text>
         <Text style={styles.qrHint}>{t('invites.qrHint')}</Text>
-        <TouchableOpacity style={styles.primaryBtn} onPress={() => share(shareText)}>
-          <Text style={styles.primaryBtnText}>{t('invites.shareLink')}</Text>
-        </TouchableOpacity>
+        {qrSaveFeedback ? (
+          <>
+            <InlineFeedback
+              tone={qrSaveFeedback.kind === 'success' ? 'success' : 'error'}
+              title={t(qrSaveFeedback.kind === 'success' ? 'common.success' : 'common.error')}
+              message={t(
+                qrSaveFeedback.kind === 'success'
+                  ? 'invites.qrSaved'
+                  : qrSaveFeedback.kind === 'permission'
+                    ? qrSaveFeedback.canAskAgain
+                      ? 'invites.qrPermissionDenied'
+                      : 'invites.qrPermissionSettings'
+                    : 'invites.qrSaveError',
+              )}
+              onDismiss={() => setQrSaveFeedback(null)}
+            />
+            {qrSaveFeedback.kind === 'permission' && !qrSaveFeedback.canAskAgain ? (
+              <TouchableOpacity
+                style={styles.qrFeedbackAction}
+                onPress={openPermissionSettings}
+                accessibilityRole="button"
+                accessibilityLabel={t('invites.openSettings')}
+              >
+                <Text style={styles.qrFeedbackActionText}>{t('invites.openSettings')}</Text>
+              </TouchableOpacity>
+            ) : qrSaveFeedback.kind !== 'success' ? (
+              <TouchableOpacity
+                style={styles.qrFeedbackAction}
+                onPress={saveQrToGallery}
+                disabled={qrSavePending}
+                accessibilityRole="button"
+                accessibilityLabel={t('common.tryAgain')}
+                accessibilityState={{ busy: qrSavePending, disabled: qrSavePending }}
+              >
+                <Text style={styles.qrFeedbackActionText}>{t('common.tryAgain')}</Text>
+              </TouchableOpacity>
+            ) : null}
+          </>
+        ) : null}
+        <View style={styles.qrActions}>
+          <TouchableOpacity
+            style={[styles.qrDownloadBtn, qrSavePending && styles.primaryBtnDisabled]}
+            onPress={saveQrToGallery}
+            disabled={qrSavePending}
+            accessibilityRole="button"
+            accessibilityLabel={t('invites.downloadQr')}
+            accessibilityState={{ busy: qrSavePending, disabled: qrSavePending }}
+          >
+            {qrSavePending ? (
+              <ActivityIndicator color={colors.text} size="small" />
+            ) : (
+              <Ionicons name="download-outline" size={20} color={colors.text} />
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.primaryBtn, styles.qrShareBtn]} onPress={() => share(shareText)}>
+            <Text style={styles.primaryBtnText}>{t('invites.shareLink')}</Text>
+          </TouchableOpacity>
+        </View>
       </CenterDialog>
 
       {/* ─── Reset Link Confirm Dialog ──────────────────────────────────── */}
@@ -592,8 +732,41 @@ const styles = StyleSheet.create({
     borderColor: '#ECECEC',
   },
   emptyLinkCard: {
-    padding: spacing.lg,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.md,
+    padding: spacing.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.lg,
+  },
+  emptyLinkHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: spacing.md,
+  },
+  emptyLinkIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: borderRadius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceVariant,
+  },
+  emptyLinkCopy: {
+    flex: 1,
+    marginLeft: spacing.sm,
+  },
+  emptyLinkTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  emptyLinkHint: {
+    marginTop: 3,
+    fontSize: 12.5,
+    lineHeight: 17,
+    color: colors.textSecondary,
   },
   enterpriseSection: {
     paddingHorizontal: 16,
@@ -668,9 +841,16 @@ const styles = StyleSheet.create({
   primaryBtn: {
     backgroundColor: colors.primary,
     borderRadius: borderRadius.full,
+    minHeight: 46,
     paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  primaryBtnDisabled: { opacity: 0.55 },
+  primaryBtnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
   },
   primaryBtnText: { color: '#FFFFFF', fontSize: 14.5, fontWeight: '700' },
   outlineBtn: {
@@ -704,6 +884,34 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
     lineHeight: 18,
   },
+  qrFeedbackAction: {
+    alignSelf: 'flex-end',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    marginTop: -spacing.sm,
+    marginBottom: spacing.md,
+  },
+  qrFeedbackActionText: {
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  qrActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  qrDownloadBtn: {
+    width: 46,
+    height: 46,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+  },
+  qrShareBtn: { flex: 1 },
   sentTo: { fontSize: 15.5, fontWeight: '700', color: colors.text, textAlign: 'center' },
   sentActions: { flexDirection: 'row', gap: spacing.sm },
   sentBtn: { flex: 1 },

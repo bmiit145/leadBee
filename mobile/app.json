@@ -48,6 +48,12 @@
       "expo-font",
       "expo-notifications",
       [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow LeadBee to save invitation QR codes to your photo library."
+        }
+      ],
+      [
         "expo-localization",
         {
           "supportedLocales": {

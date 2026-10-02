@@ -38,4 +38,6 @@ dashboard/.vite/
 
 # Local device captures and visual-design references
 .design-references/
+# Temporary local review artifacts, including screenshots
+.tmp/
 .vercel
