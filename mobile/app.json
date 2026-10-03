@@ -35,7 +35,8 @@
       },
       "package": "com.spirit.leadbee",
       "permissions": [
-        "android.permission.READ_CALL_LOG"
+        "android.permission.READ_CALL_LOG",
+        "android.permission.CAMERA"
       ],
       "blockedPermissions": [
         "android.permission.SYSTEM_ALERT_WINDOW"
@@ -47,6 +48,12 @@
       "@react-native-community/datetimepicker",
       "expo-font",
       "expo-notifications",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow LeadBee to use the camera to scan QR codes."
+        }
+      ],
       [
         "expo-media-library",
         {

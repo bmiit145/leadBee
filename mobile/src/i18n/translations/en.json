@@ -14,6 +14,9 @@
     "ok": "OK",
     "moreOptions": "More options",
     "closeMenu": "Close menu",
+    "close": "Close",
+    "allow": "Allow",
+    "openSettings": "Open Settings",
     "appName": "Property Management System"
   },
   "language": {
@@ -678,6 +681,18 @@
     "emailHint": "Only that address can accept, so a forwarded link is useless to anyone else.",
     "emailPlaceholder": "name@company.com",
     "sendInvite": "Send invitation",
+    "joinSettingsTitle": "Who can join",
+    "approvalSetting": "Approve new members",
+    "approvalHint": "New people who scan the QR code or use the link wait for an admin to approve them.",
+    "linkJoinSetting": "Join by link or QR code",
+    "linkJoinOnHint": "Anyone with the current link or QR code can request or join.",
+    "linkJoinOffHint": "Link and QR joins are closed. An admin can add a registered member by email.",
+    "linkJoinLocked": "Joining by link is turned off",
+    "addByEmailTitle": "Add a member by email",
+    "addByEmailHint": "Adds an existing LeadBee account directly. They must register before you can add them.",
+    "addMember": "Add member",
+    "memberAdded": "{{name}} was added to {{organization}}. Ask them to sign in again to access it.",
+    "settingsLoadError": "Could not load join settings",
     "sentTitle": "Invitation ready",
     "sentHint": "Share this link with them. It works once, for that email only, and we cannot show it again.",
     "pendingTitle": "Waiting on you",
@@ -713,6 +728,8 @@
       "alreadyMember": "You are already a member of this organization.",
       "emailMismatch": "That invitation was sent to a different email. Sign in with that email to accept it.",
       "notPending": "This request has already been answered.",
+      "joinClosed": "This organization is not accepting joins by link or QR code. Contact an organization admin to be added.",
+      "accountNotFound": "No active LeadBee account uses this email. Ask them to register first.",
       "failed": "Something went wrong. Please try again."
     }
   },
@@ -725,6 +742,8 @@
     "memberCount_one": "{{count}} member",
     "memberCount_other": "{{count}} members",
     "needsApproval": "Approval needed",
+    "closedTitle": "This organization is closed to link joins",
+    "closedMessage": "Contact an admin at {{organization}} and ask them to add you.",
     "join": "Join organization",
     "request": "Request to join",
     "requestedTitle": "Request sent",
@@ -733,7 +752,12 @@
     "invitedTo": "Sent to {{email}}",
     "requestsTitle": "Waiting for approval",
     "waiting": "Waiting for an admin to answer",
-    "withdraw": "Withdraw"
+    "withdraw": "Withdraw",
+    "scanQr": "Scan QR code",
+    "scanHint": "Point your camera at the invite QR code",
+    "cameraPermission": "Camera access is needed to scan QR codes.",
+    "cameraPermissionSettings": "Camera permission was denied. Open Settings to allow it.",
+    "cameraError": "Couldn't start the camera. Try again."
   },
   "transfers": {
     "title": "Transfer Requests",

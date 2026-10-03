@@ -36,6 +36,7 @@ export const INVITE_ERROR = {
   EMAIL_MISMATCH: 'INVITE_EMAIL_MISMATCH',
   /** The request was already approved, rejected or withdrawn. */
   NOT_PENDING: 'JOIN_REQUEST_NOT_PENDING',
+  JOIN_CLOSED: 'JOIN_CLOSED',
 } as const;
 
 /** A fresh code, in storage form (no dash, uppercase). */
@@ -109,6 +110,24 @@ interface Redeemable {
   expiresAt?: Date | null;
   maxUses?: number | null;
   uses: number;
+}
+
+export interface OrganizationJoinSettings {
+  requireApproval?: boolean;
+  allowLinkJoin?: boolean;
+}
+
+/** Legacy organizations without stored settings preserve the approval default. */
+export function joinRequiresApproval(
+  settings: OrganizationJoinSettings | undefined,
+  legacyLinkDefault = true
+): boolean {
+  return settings?.requireApproval ?? legacyLinkDefault;
+}
+
+/** Missing settings preserve the historical behavior: public links are allowed. */
+export function linkJoiningAllowed(settings: OrganizationJoinSettings | undefined): boolean {
+  return settings?.allowLinkJoin !== false;
 }
 
 /** Whether a shareable code may still be used. */

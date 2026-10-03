@@ -369,6 +369,7 @@ export interface InvitePreview {
   role: InviteRole;
   requiresApproval: boolean;
   alreadyMember: boolean;
+  joinClosed?: boolean;
 }
 
 // ─── Lead transfer ──────────────────────────────────────────────────────────

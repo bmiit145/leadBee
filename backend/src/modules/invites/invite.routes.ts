@@ -3,10 +3,11 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { inviteService } from './invite.service.js';
 import {
   acceptInviteBody,
-  createInviteBody,
+  addMemberByEmailBody,
   decideRequestBody,
   issueLinkBody,
   joinCodeBody,
+  joinSettingsBody,
   listInvitesQuery,
   listRequestsQuery,
   previewQuery,
@@ -27,12 +28,69 @@ const MANAGE_MEMBERS = [PERMISSIONS.USERS_MANAGE];
 const conflict = { 409: commonErrors[400] };
 
 /**
- * Admin side: the invite link, invitations by email, and the queue of people
- * asking to join. Adding a person outright is `POST /users` and stays there.
+ * Admin side: the public join link and policy, adding an existing account,
+ * and reviewing people asking to join.
  */
 export async function inviteRoutes(app: FastifyInstance): Promise<void> {
   const r = app.withTypeProvider<ZodTypeProvider>();
   r.addHook('preHandler', app.authenticateTenant);
+
+  // Members may join a second organization with the same code/QR workflow.
+  // Their person identity comes from the verified tenant token, never input.
+  r.route({
+    method: 'GET',
+    url: '/join/preview',
+    config: { rateLimit: { max: 20, timeWindow: '10 minutes' } },
+    schema: { tags: ['join'], summary: 'Preview a join code from a membership session', security: tenantSecurity, querystring: previewQuery, response: { 200: okEnvelope, ...commonErrors } },
+    handler: async (request) => ok(await inviteService.previewForAccountId(request.auth!.accountId, request.query.code)),
+  });
+
+  r.route({
+    method: 'POST',
+    url: '/join',
+    config: { rateLimit: { max: 10, timeWindow: '10 minutes' } },
+    schema: { tags: ['join'], summary: 'Join another organization with a shareable code', security: tenantSecurity, body: joinCodeBody, response: { 200: okEnvelope, 202: okEnvelope, ...commonErrors, ...conflict, 402: commonErrors[400] } },
+    handler: async (request, reply) => {
+      const outcome = await inviteService.joinForAccountId(request.auth!.accountId, request.body.code, request.body.message);
+      if (outcome.kind === 'requested') {
+        return reply.status(202).send(ok({ status: 'requested', request: outcome.request, organizationName: outcome.organizationName }));
+      }
+      request.log.info({ orgId: outcome.session.organization._id.toString() }, 'joined another organization with an invite code');
+      return ok(sessionBody(outcome.session));
+    },
+  });
+
+  r.route({
+    method: 'GET',
+    url: '/settings',
+    preHandler: [app.requirePermission(...MANAGE_MEMBERS)],
+    schema: { tags: ['invites'], summary: 'Organization link and join settings', security: tenantSecurity, response: { 200: okEnvelope, ...commonErrors } },
+    handler: async () => ok(await inviteService.joinSettings()),
+  });
+
+  r.route({
+    method: 'PATCH',
+    url: '/settings',
+    preHandler: [app.requirePermission(...MANAGE_MEMBERS)],
+    schema: { tags: ['invites'], summary: 'Change organization link and join settings', security: tenantSecurity, body: joinSettingsBody, response: { 200: okEnvelope, ...commonErrors } },
+    handler: async (request) => ok(await inviteService.updateJoinSettings(viewerOf(request), request.body, {
+      ip: request.ip,
+      userAgent: request.headers['user-agent'],
+    })),
+  });
+
+  r.route({
+    method: 'POST',
+    url: '/members',
+    preHandler: [app.requirePermission(...MANAGE_MEMBERS)],
+    config: { rateLimit: { max: 30, timeWindow: '1 hour' } },
+    schema: { tags: ['invites'], summary: 'Add an existing LeadBee account by email', security: tenantSecurity, body: addMemberByEmailBody, response: { 201: okEnvelope, ...commonErrors } },
+    handler: async (request, reply) => reply.status(201).send(ok(await inviteService.addExistingMemberByEmail(
+      viewerOf(request),
+      request.body.email,
+      { ip: request.ip, userAgent: request.headers['user-agent'] }
+    ))),
+  });
 
   // ─── The shareable link ───────────────────────────────────────────────────
   r.route({
@@ -67,7 +125,6 @@ export async function inviteRoutes(app: FastifyInstance): Promise<void> {
     handler: async (request, reply) => {
       const link = await inviteService.issueLink(viewerOf(request), {
         role: request.body.role as Role | undefined,
-        requiresApproval: request.body.requiresApproval,
         expiresInDays: request.body.expiresInDays,
         maxUses: request.body.maxUses,
       });
@@ -91,7 +148,6 @@ export async function inviteRoutes(app: FastifyInstance): Promise<void> {
       ok({
         link: await inviteService.updateLink(viewerOf(request), {
           role: request.body.role as Role | undefined,
-          requiresApproval: request.body.requiresApproval,
           expiresInDays: request.body.expiresInDays,
           maxUses: request.body.maxUses,
         }),
@@ -111,33 +167,6 @@ export async function inviteRoutes(app: FastifyInstance): Promise<void> {
     handler: async (request) => {
       await inviteService.revokeLink(viewerOf(request));
       return message('Invite link turned off');
-    },
-  });
-
-  // ─── Invitations by email ─────────────────────────────────────────────────
-  r.route({
-    method: 'POST',
-    url: '/',
-    preHandler: [app.requirePermission(...MANAGE_MEMBERS)],
-    config: { rateLimit: { max: 60, timeWindow: '1 hour' } },
-    schema: {
-      tags: ['invites'],
-      summary: 'Invite one person by email',
-      description:
-        'Answers with the invitation and its `token` **once** — only a hash is kept, ' +
-        'so it cannot be read back. Share the link; only that email can accept it.',
-      security: tenantSecurity,
-      body: createInviteBody,
-      response: { 201: okEnvelope, ...commonErrors, ...conflict },
-    },
-    handler: async (request, reply) => {
-      const result = await inviteService.invite(viewerOf(request), {
-        email: request.body.email,
-        phone: request.body.phone,
-        role: request.body.role as Role | undefined,
-        message: request.body.message,
-      });
-      return reply.status(201).send(ok(result));
     },
   });
 

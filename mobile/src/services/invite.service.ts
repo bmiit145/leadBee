@@ -24,6 +24,8 @@ export const INVITE_ERROR = {
   ALREADY_MEMBER: 'ALREADY_A_MEMBER',
   EMAIL_MISMATCH: 'INVITE_EMAIL_MISMATCH',
   NOT_PENDING: 'JOIN_REQUEST_NOT_PENDING',
+  JOIN_CLOSED: 'JOIN_CLOSED',
+  ACCOUNT_NOT_FOUND: 'ACCOUNT_NOT_FOUND',
 } as const;
 
 /** The translation key for a failed invite call, by its stable code. */
@@ -39,6 +41,10 @@ export function inviteErrorKey(error: unknown): string {
       return 'invites.errors.emailMismatch';
     case INVITE_ERROR.NOT_PENDING:
       return 'invites.errors.notPending';
+    case INVITE_ERROR.JOIN_CLOSED:
+      return 'invites.errors.joinClosed';
+    case INVITE_ERROR.ACCOUNT_NOT_FOUND:
+      return 'invites.errors.accountNotFound';
     default:
       return 'invites.errors.failed';
   }
@@ -49,10 +55,6 @@ export function joinUrlFor(code: string): string {
 }
 
 /** Where an emailed invitation points. Carries the token, so it is shared once. */
-export function inviteUrlFor(token: string): string {
-  return `${JOIN_BASE_URL}/invite#${token}`;
-}
-
 /**
  * The token out of an invitation link, or the whole string when someone pasted
  * the token by itself. `#` keeps it out of server logs and browser history
@@ -66,7 +68,6 @@ export function tokenFromInviteLink(input: string): string {
 
 interface LinkSettings {
   role?: InviteRole;
-  requiresApproval?: boolean;
   /** `null` means it never lapses. */
   expiresInDays?: number | null;
   maxUses?: number | null;
@@ -74,6 +75,21 @@ interface LinkSettings {
 
 /** Admin side: the link, invitations, and the queue of people asking to join. */
 export const inviteService = {
+  async getJoinSettings(): Promise<{ requireApproval: boolean; allowLinkJoin: boolean }> {
+    const res = await api.get<ApiResponse<{ requireApproval: boolean; allowLinkJoin: boolean }>>('/invites/settings');
+    return res.data.data;
+  },
+
+  async updateJoinSettings(settings: Partial<{ requireApproval: boolean; allowLinkJoin: boolean }>) {
+    const res = await api.patch<ApiResponse<{ requireApproval: boolean; allowLinkJoin: boolean }>>('/invites/settings', settings);
+    return res.data.data;
+  },
+
+  async addMemberByEmail(email: string): Promise<User> {
+    const res = await api.post<ApiResponse<User>>('/invites/members', { email: email.trim().toLowerCase() });
+    return res.data.data;
+  },
+
   async getLink(): Promise<JoinLink | null> {
     const res = await api.get<ApiResponse<{ link: JoinLink | null }>>('/invites/link');
     return res.data.data.link;
@@ -92,20 +108,6 @@ export const inviteService = {
 
   async turnLinkOff(): Promise<void> {
     await api.delete('/invites/link');
-  },
-
-  /** The token comes back once, inside the link to share. */
-  async invite(data: {
-    email: string;
-    phone?: string;
-    role?: InviteRole;
-    message?: string;
-  }): Promise<{ invite: OrganizationInvite; token: string }> {
-    const res = await api.post<ApiResponse<{ invite: OrganizationInvite; token: string }>>(
-      '/invites',
-      data
-    );
-    return res.data.data;
   },
 
   async listInvites(status?: InviteStatus): Promise<PaginatedResponse<OrganizationInvite>> {
@@ -182,12 +184,14 @@ async function adopt(payload: JoinedPayload): Promise<JoinResult> {
 /** The joining side, used while the person still has only an account session. */
 export const joinService = {
   async preview(code: string): Promise<InvitePreview> {
-    const res = await api.get<ApiResponse<InvitePreview>>('/join/preview', { params: { code } });
+    const route = (await storage.getSessionKind()) === 'account' ? '/join/preview' : '/invites/join/preview';
+    const res = await api.get<ApiResponse<InvitePreview>>(route, { params: { code } });
     return res.data.data;
   },
 
   async join(code: string, message?: string): Promise<JoinResult> {
-    const res = await api.post<ApiResponse<JoinedPayload | RequestedPayload>>('/join', {
+    const route = (await storage.getSessionKind()) === 'account' ? '/join' : '/invites/join';
+    const res = await api.post<ApiResponse<JoinedPayload | RequestedPayload>>(route, {
       code,
       ...(message ? { message } : {}),
     });

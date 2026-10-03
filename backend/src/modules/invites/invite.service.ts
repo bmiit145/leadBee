@@ -14,7 +14,8 @@ import { logger } from '../../lib/logger.js';
 import { pageParams } from '../../lib/pagination.js';
 import { requireOrganizationId, runInTenantScope, withoutTenantScope } from '../../lib/tenantContext.js';
 import { withOptionalTransaction } from '../../lib/transactions.js';
-import { ORGANIZER_ROLES, ROLES, type Role } from '../../config/constants.js';
+import { AUDIT_ACTIONS, ORGANIZER_ROLES, ROLES, type Role } from '../../config/constants.js';
+import { auditService } from '../audit/audit.service.js';
 import { organizationService } from '../organizations/organization.service.js';
 import { memberService } from '../users/member.service.js';
 import { notificationService } from '../notifications/notification.service.js';
@@ -23,18 +24,18 @@ import { accountSessionService } from '../accounts/accountSession.service.js';
 import type { Viewer } from '../leads/lead.service.js';
 import {
   INVITE_ERROR,
-  INVITE_EXPIRY_DAYS,
   JOIN_CODE_EXPIRY_DAYS,
   assertLinkRole,
   codeIsOpen,
   daysFromNow,
   digestsMatch,
   formatJoinCode,
-  generateInviteToken,
   generateJoinCode,
   hashInviteToken,
   invalidCode,
   inviteIsOpen,
+  joinRequiresApproval,
+  linkJoiningAllowed,
   normalizeJoinCode,
 } from './invitePolicy.js';
 
@@ -59,6 +60,8 @@ export interface InvitePreview {
   requiresApproval: boolean;
   /** Set when the caller already belongs to this organization. */
   alreadyMember: boolean;
+  /** The code is recognized, but the organization is currently closed to link joins. */
+  joinClosed?: boolean;
 }
 
 /** The outcome of using a code or a token. */
@@ -69,7 +72,111 @@ export type JoinOutcome =
 const MAX_ATTEMPTS_PER_CODE = 5;
 
 export const inviteService = {
+  async previewForAccountId(accountId: Types.ObjectId, code: string): Promise<InvitePreview> {
+    const account = await withoutTenantScope('join: resolve the authenticated person behind a membership', () =>
+      Account.findById(accountId).exec()
+    );
+    if (!account || account.status !== 'active') throw AppError.unauthorized();
+    return this.preview(code, account);
+  },
+
+  async joinForAccountId(accountId: Types.ObjectId, code: string, message?: string): Promise<JoinOutcome> {
+    const account = await withoutTenantScope('join: resolve the authenticated person behind a membership', () =>
+      Account.findById(accountId).exec()
+    );
+    if (!account || account.status !== 'active') throw AppError.unauthorized();
+    return this.join(account, code, message);
+  },
+
   // ─── Admin: the shareable link ────────────────────────────────────────────
+
+  async joinSettings(): Promise<{ requireApproval: boolean; allowLinkJoin: boolean }> {
+    const organization = await Organization.findById(requireOrganizationId()).select('joinSettings').exec();
+    if (!organization) throw AppError.notFound('Organization not found');
+    return {
+      requireApproval: organization.joinSettings?.requireApproval ?? true,
+      allowLinkJoin: organization.joinSettings?.allowLinkJoin ?? true,
+    };
+  },
+
+  async updateJoinSettings(
+    viewer: Viewer,
+    changes: { requireApproval?: boolean; allowLinkJoin?: boolean },
+    origin?: { ip: string; userAgent?: string }
+  ): Promise<{ requireApproval: boolean; allowLinkJoin: boolean }> {
+    const organizationId = requireOrganizationId();
+    const organization = await Organization.findById(organizationId).exec();
+    if (!organization) throw AppError.notFound('Organization not found');
+    const previous = {
+      requireApproval: organization.joinSettings?.requireApproval ?? true,
+      allowLinkJoin: organization.joinSettings?.allowLinkJoin ?? true,
+    };
+    const next = {
+      requireApproval: changes.requireApproval ?? organization.joinSettings?.requireApproval ?? true,
+      allowLinkJoin: changes.allowLinkJoin ?? organization.joinSettings?.allowLinkJoin ?? true,
+    };
+    // Retire the code before saving the closed flag. If either write fails, a
+    // partial result is closed to joins, never an open code under a closed UI.
+    if (changes.allowLinkJoin === false || changes.allowLinkJoin === true) {
+      await JoinCode.updateMany({ isActive: true }, { $set: { isActive: false, revokedAt: new Date(), revokedBy: viewer.userId } });
+    }
+    organization.joinSettings = next;
+    await organization.save();
+    if (next.allowLinkJoin && changes.requireApproval !== undefined) {
+      await JoinCode.updateMany({ isActive: true }, { $set: { requiresApproval: next.requireApproval } });
+    }
+    await auditService.record({
+      action: AUDIT_ACTIONS.ORG_JOIN_SETTINGS_CHANGED,
+      entityType: 'organization',
+      entityId: organization._id,
+      actor: viewer,
+      before: previous,
+      after: next,
+      origin,
+    });
+    logger.info({ userId: viewer.userId.toString(), ...next }, 'organization join settings changed');
+    return next;
+  },
+
+  async addExistingMemberByEmail(
+    viewer: Viewer,
+    emailInput: string,
+    origin?: { ip: string; userAgent?: string }
+  ): Promise<Record<string, unknown>> {
+    const email = emailInput.trim().toLowerCase();
+    const account = await withoutTenantScope('member add: resolve the existing account by email', () =>
+      Account.findOne({ email, status: 'active' }).exec()
+    );
+    if (!account) {
+      throw new AppError('No active LeadBee account uses this email. Ask them to register first.', 404, 'ACCOUNT_NOT_FOUND');
+    }
+    const organizationId = requireOrganizationId();
+    const member = await withOptionalTransaction(async (session) => {
+      await assertNotAlreadyMember(organizationId, account._id, session);
+      const organization = await Organization.findById(organizationId).session(session ?? null).exec();
+      if (!organization) throw AppError.notFound('Organization not found');
+      await organizationService.assertCanAddUser(organization);
+      const added = await runInTenantScope(
+        { organizationId, userId: viewer.userId, role: viewer.role, permissions: [] },
+        () => memberService.addExistingAccount(organizationId, account, { role: ROLES.USER }, session)
+      );
+      await Organization.updateOne(
+        { _id: organizationId },
+        { $inc: { 'usage.users': 1 } },
+        { session }
+      ).exec();
+      return added;
+    });
+    await auditService.record({
+      action: AUDIT_ACTIONS.USER_CREATED,
+      entityType: 'user',
+      entityId: member._id,
+      actor: viewer,
+      after: { name: member.name, email: member.email, role: member.role },
+      origin,
+    });
+    return { _id: member._id, name: member.name, email: member.email, role: member.role };
+  },
 
   /** The organization's current link, or null when it has none yet. */
   async activeLink(): Promise<JoinLinkView | null> {
@@ -83,10 +190,16 @@ export const inviteService = {
    */
   async issueLink(
     viewer: Viewer,
-    options: { role?: Role; requiresApproval?: boolean; expiresInDays?: number | null; maxUses?: number | null } = {}
+    options: { role?: Role; expiresInDays?: number | null; maxUses?: number | null } = {}
   ): Promise<JoinLinkView> {
     const role = options.role ?? ROLES.USER;
     assertLinkRole(role);
+
+    const organization = await Organization.findById(requireOrganizationId()).select('joinSettings').exec();
+    if (!organization) throw AppError.notFound('Organization not found');
+    if (!linkJoiningAllowed(organization.joinSettings)) {
+      throw new AppError('Link and QR joining is turned off. Turn it on in join settings first.', 409, INVITE_ERROR.JOIN_CLOSED);
+    }
 
     const now = new Date();
     await JoinCode.updateMany(
@@ -99,7 +212,7 @@ export const inviteService = {
       organizationId: requireOrganizationId(),
       code: await uniqueJoinCode(),
       role,
-      requiresApproval: options.requiresApproval ?? true,
+      requiresApproval: joinRequiresApproval(organization.joinSettings),
       expiresAt: expiresInDays == null ? undefined : daysFromNow(expiresInDays, now),
       maxUses: options.maxUses ?? undefined,
       createdBy: viewer.userId,
@@ -111,7 +224,7 @@ export const inviteService = {
   /** Changes the settings on the live link without changing the code itself. */
   async updateLink(
     viewer: Viewer,
-    changes: { role?: Role; requiresApproval?: boolean; expiresInDays?: number | null; maxUses?: number | null }
+    changes: { role?: Role; expiresInDays?: number | null; maxUses?: number | null }
   ): Promise<JoinLinkView> {
     const code = await JoinCode.findOne({ isActive: true });
     if (!code) throw AppError.notFound('This organization has no invite link yet.');
@@ -120,7 +233,6 @@ export const inviteService = {
       assertLinkRole(changes.role);
       code.role = changes.role;
     }
-    if (changes.requiresApproval !== undefined) code.requiresApproval = changes.requiresApproval;
     if (changes.expiresInDays !== undefined) {
       code.expiresAt = changes.expiresInDays == null ? undefined : daysFromNow(changes.expiresInDays, new Date());
     }
@@ -137,58 +249,6 @@ export const inviteService = {
       { isActive: true },
       { $set: { isActive: false, revokedAt: new Date(), revokedBy: viewer.userId } }
     );
-  },
-
-  // ─── Admin: invitations by email ──────────────────────────────────────────
-
-  /**
-   * Invites one person by email.
-   *
-   * The token is returned **once**, in the link the admin shares; only its hash
-   * is stored. No mail is sent yet — LeadBee has no mailer (registration codes
-   * are in the same position), so the admin shares the link over WhatsApp, SMS
-   * or their own email client.
-   */
-  async invite(
-    viewer: Viewer,
-    input: { email: string; phone?: string; role?: Role; message?: string }
-  ): Promise<{ invite: Record<string, unknown>; token: string }> {
-    const role = input.role ?? ROLES.USER;
-    assertLinkRole(role);
-
-    const email = input.email.trim().toLowerCase();
-    const alreadyHere = await User.findOne({ email, isActive: true }).select('_id').lean();
-    if (alreadyHere) {
-      throw new AppError(
-        'That person is already in this organization.',
-        409,
-        INVITE_ERROR.ALREADY_MEMBER
-      );
-    }
-
-    const now = new Date();
-    await expireLapsedInvites(now);
-
-    const { token, tokenHash } = generateInviteToken();
-    let created: IOrganizationInvite;
-    try {
-      created = await OrganizationInvite.create({
-        organizationId: requireOrganizationId(),
-        email,
-        phone: input.phone,
-        role,
-        tokenHash,
-        message: input.message,
-        expiresAt: daysFromNow(INVITE_EXPIRY_DAYS, now),
-        invitedBy: viewer.userId,
-        invitedByName: viewer.name,
-      });
-    } catch (error) {
-      if (!isDuplicateKey(error)) throw error;
-      throw AppError.conflict('An invitation to that email is already waiting to be accepted.');
-    }
-
-    return { invite: presentInvite(created), token };
   },
 
   async listInvites(
@@ -315,7 +375,7 @@ export const inviteService = {
     const found = await withoutTenantScope('join: resolve an invite code to its organization', () =>
       JoinCode.findOne({ code }).exec()
     );
-    if (!found || !codeIsOpen(found, new Date())) throw invalidCode();
+    if (!found) throw invalidCode();
 
     const [organization, memberCount, existing] = await withoutTenantScope(
       'join: describe the organization behind a code',
@@ -334,11 +394,23 @@ export const inviteService = {
     );
     if (!organization) throw invalidCode();
 
+    if (!linkJoiningAllowed(organization.joinSettings)) {
+      return {
+        organizationName: organization.name,
+        memberCount,
+        role: found.role,
+        requiresApproval: true,
+        alreadyMember: Boolean(existing),
+        joinClosed: true,
+      };
+    }
+    if (!codeIsOpen(found, new Date())) throw invalidCode();
+
     return {
       organizationName: organization.name,
       memberCount,
       role: found.role,
-      requiresApproval: found.requiresApproval,
+      requiresApproval: joinRequiresApproval(organization.joinSettings, found.requiresApproval),
       alreadyMember: Boolean(existing),
     };
   },
@@ -357,22 +429,32 @@ export const inviteService = {
       const found = await withoutTenantScope('join: resolve an invite code to its organization', () =>
         JoinCode.findOne({ code }).session(session ?? null).exec()
       );
-      if (!found || !codeIsOpen(found, new Date())) throw invalidCode();
+      if (!found) throw invalidCode();
 
       const organization = await withoutTenantScope('join: the organization being joined', () =>
         Organization.findById(found.organizationId).session(session ?? null).exec()
       );
       if (!organization) throw invalidCode();
+      if (!linkJoiningAllowed(organization.joinSettings)) {
+        throw new AppError('This organization is not accepting joins by link or QR code. Contact an organization admin to be added.', 403, INVITE_ERROR.JOIN_CLOSED);
+      }
+      if (!codeIsOpen(found, new Date())) throw invalidCode();
 
       await assertNotAlreadyMember(found.organizationId, account._id, session);
 
-      if (found.requiresApproval) {
-        const request = await raiseJoinRequest(found, account, organization, message, session);
-        return { kind: 'requested', request, organizationName: organization.name };
+      const requiresApproval = joinRequiresApproval(organization.joinSettings, found.requiresApproval);
+      if (requiresApproval) {
+        const pending = await runInTenantScope(
+          { organizationId: found.organizationId, userId: new Types.ObjectId(), role: ROLES.OWNER, permissions: ['*'] },
+          () => JoinRequest.exists({ accountId: account._id, status: 'pending' }).session(session ?? null).exec()
+        );
+        if (pending) {
+          throw new AppError('You have already asked to join this organization. An admin will answer it.', 409, INVITE_ERROR.REQUEST_PENDING);
+        }
       }
 
-      // Claim a use before the membership exists, so a limited code cannot be
-      // over-redeemed; a failure afterwards costs one use, never an extra member.
+      // Every scan consumes a use, including an approval request. The claim is
+      // atomic, so concurrent scans cannot overrun maxUses.
       const claimed = await withoutTenantScope('join: claim one use of an invite code', () =>
         JoinCode.findOneAndUpdate(
           {
@@ -385,6 +467,11 @@ export const inviteService = {
         ).exec()
       );
       if (!claimed) throw invalidCode();
+
+      if (requiresApproval) {
+        const request = await raiseJoinRequest(found, account, organization, message, session);
+        return { kind: 'requested', request, organizationName: organization.name };
+      }
 
       const membershipSession = await createMembershipSession(organization, account, found.role, session);
       return { kind: 'joined', session: membershipSession };
@@ -419,6 +506,9 @@ export const inviteService = {
         Organization.findById(invite.organizationId).session(session ?? null).exec()
       );
       if (!organization) throw invalidCode();
+      if (!linkJoiningAllowed(organization.joinSettings)) {
+        throw new AppError('This organization is not accepting joins by link or QR code. Contact an organization admin to be added.', 403, INVITE_ERROR.JOIN_CLOSED);
+      }
 
       await assertNotAlreadyMember(invite.organizationId, account._id, session);
 

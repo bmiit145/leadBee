@@ -13,19 +13,19 @@ const maxUses = z.number().int().min(1).max(500).nullable();
 
 export const issueLinkBody = z.object({
   role: linkRole.optional(),
-  requiresApproval: z.boolean().optional(),
   expiresInDays: expiresInDays.optional(),
   maxUses: maxUses.optional(),
 });
 
 export const updateLinkBody = issueLinkBody;
 
-export const createInviteBody = z.object({
+export const joinSettingsBody = z.object({
+  requireApproval: z.boolean().optional(),
+  allowLinkJoin: z.boolean().optional(),
+}).refine((value) => Object.keys(value).length > 0, 'At least one join setting is required');
+
+export const addMemberByEmailBody = z.object({
   email: z.string().trim().toLowerCase().email('A valid email is required').max(254),
-  /** Optional, so the admin can send the link by SMS or WhatsApp as well. */
-  phone: z.string().trim().max(20).optional(),
-  role: linkRole.optional(),
-  message: z.string().trim().max(300).optional(),
 });
 
 export const listInvitesQuery = paginationQuery.extend({

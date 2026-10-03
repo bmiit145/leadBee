@@ -11,6 +11,8 @@ import {
   hashInviteToken,
   invalidCode,
   inviteIsOpen,
+  joinRequiresApproval,
+  linkJoiningAllowed,
   looksLikeJoinCode,
   normalizeJoinCode,
 } from './invitePolicy.js';
@@ -88,6 +90,21 @@ describe('inviteIsOpen', () => {
     for (const status of ['accepted', 'revoked', 'expired']) {
       expect(inviteIsOpen({ status, expiresAt: later(1000) }, NOW)).toBe(false);
     }
+  });
+});
+
+describe('organization join settings', () => {
+  it('preserves the legacy approval default while honoring an organization setting', () => {
+    expect(joinRequiresApproval(undefined)).toBe(true);
+    expect(joinRequiresApproval(undefined, false)).toBe(false);
+    expect(joinRequiresApproval({ requireApproval: false }, true)).toBe(false);
+    expect(joinRequiresApproval({ requireApproval: true }, false)).toBe(true);
+  });
+
+  it('keeps link joining enabled for legacy organizations and closes it only explicitly', () => {
+    expect(linkJoiningAllowed(undefined)).toBe(true);
+    expect(linkJoiningAllowed({ allowLinkJoin: true })).toBe(true);
+    expect(linkJoiningAllowed({ allowLinkJoin: false })).toBe(false);
   });
 });
 

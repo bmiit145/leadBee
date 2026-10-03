@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -7,10 +7,11 @@ import {
   StyleSheet,
   ScrollView,
   ActivityIndicator,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
-  Alert,
 } from 'react-native';
+import { QrScanner } from '../../src/components/QrScanner';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,6 +20,7 @@ import { useTranslation } from 'react-i18next';
 import * as Clipboard from 'expo-clipboard';
 import { colors, spacing, borderRadius } from '../../src/theme';
 import { Avatar, StatusChip } from '../../src/components/ui';
+import { InlineFeedback } from '../../src/components/ui/InlineFeedback';
 import { queryKeys } from '../../src/lib/queryKeys';
 import {
   inviteErrorKey,
@@ -50,9 +52,11 @@ export default function JoinOrganizationScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
-  const { joinOrganization, acceptInvitation, account } = useAuth();
+  const { joinOrganization, acceptInvitation, account, isAccountSession } = useAuth();
 
   const [input, setInput] = useState('');
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [feedback, setFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
   const typed = useDebouncedValue(input.trim(), 400);
   const asCode = isCode(typed);
 
@@ -67,15 +71,17 @@ export default function JoinOrganizationScreen() {
   const invitations = useQuery({
     queryKey: queryKeys.invites.myInvitations,
     queryFn: joinService.myInvitations,
+    enabled: isAccountSession,
   });
   const requests = useQuery({
     queryKey: queryKeys.invites.myRequests,
     queryFn: joinService.myRequests,
+    enabled: isAccountSession,
   });
 
   const fail = (error: unknown) => {
     warningFeedback();
-    Alert.alert(t('common.error'), t(inviteErrorKey(error)));
+    setFeedback({ kind: 'error', message: t(inviteErrorKey(error)) });
   };
 
   const joinMutation = useMutation({
@@ -91,10 +97,7 @@ export default function JoinOrganizationScreen() {
       }
       setInput('');
       qc.invalidateQueries({ queryKey: queryKeys.invites.myRequests });
-      Alert.alert(
-        t('join.requestedTitle'),
-        t('join.requestedMessage', { organization: result.organizationName })
-      );
+      setFeedback({ kind: 'success', message: t('join.requestedMessage', { organization: result.organizationName }) });
     },
     onError: fail,
   });
@@ -107,11 +110,17 @@ export default function JoinOrganizationScreen() {
 
   const paste = async () => {
     const text = await Clipboard.getStringAsync();
-    if (text) setInput(text.trim());
+    if (text) setInput(tokenFromInviteLink(text));
   };
 
+  const handleQrScanned = useCallback((data: string) => {
+    setScannerOpen(false);
+    setInput(tokenFromInviteLink(data));
+    tapFeedback();
+  }, []);
+
   const previewError = preview.isError;
-  const canSubmit = (asCode && preview.data && !preview.data.alreadyMember) || (!asCode && isToken(typed));
+  const canSubmit = (asCode && preview.data && !preview.data.alreadyMember && !preview.data.joinClosed) || (!asCode && isToken(typed));
 
   return (
     <KeyboardAvoidingView
@@ -133,6 +142,15 @@ export default function JoinOrganizationScreen() {
         <Text style={styles.title}>{t('join.title')}</Text>
         <Text style={styles.subtitle}>{t('join.subtitle')}</Text>
 
+        {feedback ? (
+          <InlineFeedback
+            tone={feedback.kind}
+            title={t(feedback.kind === 'success' ? 'join.requestedTitle' : 'common.error')}
+            message={feedback.message}
+            onDismiss={() => setFeedback(null)}
+          />
+        ) : null}
+
         <View style={styles.inputRow}>
           <TextInput
             value={input}
@@ -146,6 +164,17 @@ export default function JoinOrganizationScreen() {
           />
           <TouchableOpacity style={styles.pasteBtn} onPress={paste} accessibilityRole="button">
             <Ionicons name="clipboard-outline" size={18} color={colors.primary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.scanBtn}
+            onPress={() => {
+              Keyboard.dismiss();
+              setScannerOpen(true);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={t('join.scanQr')}
+          >
+            <Ionicons name="qr-code-outline" size={20} color="#FFFFFF" />
           </TouchableOpacity>
         </View>
         <Text style={styles.hint}>{t('join.hint')}</Text>
@@ -183,6 +212,14 @@ export default function JoinOrganizationScreen() {
 
         {asCode && preview.data?.alreadyMember ? (
           <Text style={styles.alreadyMember}>{t('invites.errors.alreadyMember')}</Text>
+        ) : null}
+
+        {asCode && preview.data?.joinClosed ? (
+          <View style={styles.closedJoinCard} accessibilityRole="summary">
+            <View style={styles.closedJoinIcon}><Ionicons name="lock-closed" size={22} color={colors.primary} /></View>
+            <Text style={styles.closedJoinTitle}>{t('join.closedTitle')}</Text>
+            <Text style={styles.closedJoinMessage}>{t('join.closedMessage', { organization: preview.data.organizationName })}</Text>
+          </View>
         ) : null}
 
         <TouchableOpacity
@@ -226,6 +263,14 @@ export default function JoinOrganizationScreen() {
           </>
         ) : null}
       </ScrollView>
+
+      {/* ─── Full-screen QR Scanner Overlay ──────────────────────────── */}
+      {scannerOpen ? (
+        <QrScanner
+          onScanned={handleQrScanned}
+          onClose={() => setScannerOpen(false)}
+        />
+      ) : null}
     </KeyboardAvoidingView>
   );
 }
@@ -330,6 +375,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: colors.surface,
   },
+  scanBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+  },
   hint: { fontSize: 12.5, color: colors.textSecondary, marginTop: 8, lineHeight: 18 },
   loading: { marginVertical: spacing.lg },
   previewCard: {
@@ -343,6 +396,19 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.surface,
   },
+  closedJoinCard: {
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: `${colors.primary}45`,
+    backgroundColor: `${colors.primary}0A`,
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  closedJoinIcon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface },
+  closedJoinTitle: { fontSize: 16, fontWeight: '700', color: colors.text, textAlign: 'center' },
+  closedJoinMessage: { fontSize: 13.5, lineHeight: 20, color: colors.textSecondary, textAlign: 'center' },
   previewBad: { borderColor: `${colors.error}55`, backgroundColor: `${colors.error}0D` },
   previewBadText: { flex: 1, fontSize: 13.5, color: colors.error },
   previewText: { flex: 1, minWidth: 0 },

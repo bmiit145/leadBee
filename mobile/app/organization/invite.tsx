@@ -7,9 +7,11 @@ import {
   StyleSheet,
   ActivityIndicator,
   TextInput,
-  Alert,
   Share,
   Linking,
+  Platform,
+  ToastAndroid,
+  Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -36,7 +38,6 @@ import { queryKeys } from '../../src/lib/queryKeys';
 import {
   inviteService,
   inviteErrorKey,
-  inviteUrlFor,
   joinUrlFor,
 } from '../../src/services/invite.service';
 import { useAuth } from '../../src/stores/auth.store';
@@ -73,7 +74,7 @@ export default function InviteMembersScreen() {
   const [qrSavePending, setQrSavePending] = useState(false);
   const [qrSaveFeedback, setQrSaveFeedback] = useState<QrSaveFeedback>(null);
   const [resetOpen, setResetOpen] = useState(false);
-  const [sentInvite, setSentInvite] = useState<{ email: string; url: string } | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
   const qrRef = useRef<QrCodeHandle | null>(null);
 
   // The drawer hides this destination from members, but deep links and
@@ -97,6 +98,11 @@ export default function InviteMembersScreen() {
     queryFn: () => inviteService.listInvites('pending'),
     enabled: canManageMembers,
   });
+  const settingsQuery = useQuery({
+    queryKey: queryKeys.invites.settings,
+    queryFn: inviteService.getJoinSettings,
+    enabled: canManageMembers,
+  });
 
   const link = linkQuery.data;
   const joinUrl = link ? joinUrlFor(link.code) : '';
@@ -104,7 +110,7 @@ export default function InviteMembersScreen() {
 
   const fail = (error: unknown) => {
     warningFeedback();
-    Alert.alert(t('common.error'), t(inviteErrorKey(error)));
+    setActionFeedback({ kind: 'error', message: t(inviteErrorKey(error)) });
   };
 
   const issueMutation = useMutation({
@@ -116,13 +122,25 @@ export default function InviteMembersScreen() {
     onError: fail,
   });
 
-  const inviteMutation = useMutation({
-    mutationFn: () => inviteService.invite({ email: email.trim().toLowerCase() }),
-    onSuccess: ({ invite, token }) => {
+  const settingsMutation = useMutation({
+    mutationFn: inviteService.updateJoinSettings,
+    onSuccess: () => {
       tapFeedback();
-      setSentInvite({ email: invite.email, url: inviteUrlFor(token) });
-      setEmail('');
       refresh();
+    },
+    onError: fail,
+  });
+
+  const addMemberMutation = useMutation({
+    mutationFn: () => inviteService.addMemberByEmail(email),
+    onSuccess: (member) => {
+      tapFeedback();
+      setEmail('');
+      void qc.invalidateQueries({ queryKey: queryKeys.users.all });
+      setActionFeedback({
+        kind: 'success',
+        message: t('invites.memberAdded', { name: member.name, organization: organization?.name ?? '' }),
+      });
     },
     onError: fail,
   });
@@ -133,7 +151,7 @@ export default function InviteMembersScreen() {
     onSuccess: (_result, { decision }) => {
       tapFeedback();
       refresh();
-      if (decision === 'approve') Alert.alert(t('common.success'), t('invites.approvedToast'));
+      if (decision === 'approve') setActionFeedback({ kind: 'success', message: t('invites.approvedToast') });
     },
     onError: fail,
   });
@@ -155,7 +173,9 @@ export default function InviteMembersScreen() {
   const copy = async (value: string) => {
     await Clipboard.setStringAsync(value);
     tapFeedback();
-    Alert.alert(t('invites.copied'));
+    if (Platform.OS === 'android') {
+      ToastAndroid.show(t('invites.copied'), ToastAndroid.SHORT);
+    }
   };
 
   const saveQrToGallery = async () => {
@@ -250,6 +270,15 @@ export default function InviteMembersScreen() {
         titleAlign="left"
       />
 
+      {actionFeedback ? (
+        <InlineFeedback
+          tone={actionFeedback.kind}
+          title={t(actionFeedback.kind === 'success' ? 'common.success' : 'common.error')}
+          message={actionFeedback.message}
+          onDismiss={() => setActionFeedback(null)}
+        />
+      ) : null}
+
       <ScrollView
         contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xl }}
         showsVerticalScrollIndicator={false}
@@ -278,9 +307,53 @@ export default function InviteMembersScreen() {
 
         <View style={styles.divider} />
 
+        <View style={styles.enterpriseSection}>
+          <Text style={styles.enterpriseSectionTitle}>{t('invites.joinSettingsTitle')}</Text>
+          {settingsQuery.isLoading ? (
+            <ActivityIndicator color={colors.primary} style={styles.loading} />
+          ) : settingsQuery.isError ? (
+            <EmptyState icon="cloud-offline-outline" title={t('invites.settingsLoadError')} actionLabel={t('common.tryAgain')} onAction={() => void settingsQuery.refetch()} />
+          ) : settingsQuery.data ? (
+            <>
+              <View style={styles.settingRow}>
+                <View style={styles.settingText}>
+                  <Text style={styles.settingTitle}>{t('invites.approvalSetting')}</Text>
+                  <Text style={styles.settingHint}>{t('invites.approvalHint')}</Text>
+                </View>
+                <Switch
+                  value={settingsQuery.data.requireApproval}
+                  onValueChange={(requireApproval) => settingsMutation.mutate({ requireApproval })}
+                  disabled={settingsMutation.isPending}
+                  accessibilityLabel={t('invites.approvalSetting')}
+                />
+              </View>
+              <View style={styles.settingRow}>
+                <View style={styles.settingText}>
+                  <Text style={styles.settingTitle}>{t('invites.linkJoinSetting')}</Text>
+                  <Text style={styles.settingHint}>{t(settingsQuery.data.allowLinkJoin ? 'invites.linkJoinOnHint' : 'invites.linkJoinOffHint')}</Text>
+                </View>
+                <Switch
+                  value={settingsQuery.data.allowLinkJoin}
+                  onValueChange={(allowLinkJoin) => settingsMutation.mutate({ allowLinkJoin })}
+                  disabled={settingsMutation.isPending}
+                  accessibilityLabel={t('invites.linkJoinSetting')}
+                />
+              </View>
+            </>
+          ) : null}
+        </View>
+
         {/* ─── Action Rows (WhatsApp Group link Style) ─────────────────────── */}
-        {linkQuery.isLoading ? (
+        {linkQuery.isLoading || settingsQuery.isLoading ? (
           <ActivityIndicator color={colors.primary} style={styles.loading} />
+        ) : settingsQuery.isError ? (
+          <EmptyState icon="cloud-offline-outline" title={t('invites.settingsLoadError')} actionLabel={t('common.tryAgain')} onAction={() => void settingsQuery.refetch()} />
+        ) : settingsQuery.data?.allowLinkJoin === false ? (
+          <View style={styles.closedCard}>
+            <Ionicons name="lock-closed-outline" size={26} color={colors.textSecondary} />
+            <Text style={styles.closedTitle}>{t('invites.linkJoinLocked')}</Text>
+            <Text style={styles.closedHint}>{t('invites.linkJoinOffHint')}</Text>
+          </View>
         ) : !link ? (
           <View style={styles.emptyLinkCard}>
             <View style={styles.emptyLinkHeader}>
@@ -349,10 +422,10 @@ export default function InviteMembersScreen() {
 
         <View style={styles.sectionSpacer} />
 
-        {/* ─── Direct Email Invitations (Enterprise Feature) ─────────────── */}
+        {/* ─── Add a registered person by email ──────────────────────────── */}
         <View style={styles.enterpriseSection}>
-          <Text style={styles.enterpriseSectionTitle}>{t('invites.emailTitle')}</Text>
-          <Text style={styles.enterpriseHint}>{t('invites.emailHint')}</Text>
+          <Text style={styles.enterpriseSectionTitle}>{t('invites.addByEmailTitle')}</Text>
+          <Text style={styles.enterpriseHint}>{t('invites.addByEmailHint')}</Text>
           <View style={styles.emailRow}>
             <TextInput
               value={email}
@@ -367,15 +440,15 @@ export default function InviteMembersScreen() {
             />
             <TouchableOpacity
               style={[styles.sendBtn, !isValidEmail(email) && styles.sendBtnOff]}
-              onPress={() => inviteMutation.mutate()}
-              disabled={!isValidEmail(email) || inviteMutation.isPending}
+              onPress={() => addMemberMutation.mutate()}
+              disabled={!isValidEmail(email) || addMemberMutation.isPending}
               accessibilityRole="button"
-              accessibilityLabel={t('invites.sendInvite')}
+              accessibilityLabel={t('invites.addMember')}
             >
-              {inviteMutation.isPending ? (
+              {addMemberMutation.isPending ? (
                 <ActivityIndicator color="#FFFFFF" size="small" />
               ) : (
-                <Ionicons name="paper-plane" size={17} color="#FFFFFF" />
+                <Ionicons name="person-add" size={17} color="#FFFFFF" />
               )}
             </TouchableOpacity>
           </View>
@@ -520,32 +593,6 @@ export default function InviteMembersScreen() {
         loading={issueMutation.isPending}
       />
 
-      {/* ─── Single-use Invite Sent Modal ───────────────────────────────── */}
-      <CenterDialog
-        visible={!!sentInvite}
-        onDismiss={() => setSentInvite(null)}
-        title={t('invites.sentTitle')}
-      >
-        <Text style={styles.sentTo}>{sentInvite?.email}</Text>
-        <Text style={styles.qrHint}>{t('invites.sentHint')}</Text>
-        <View style={styles.sentActions}>
-          <TouchableOpacity
-            style={[styles.primaryBtn, styles.sentBtn]}
-            onPress={() => sentInvite && share(t('invites.inviteMessage', {
-              organization: organization?.name ?? '',
-              url: sentInvite.url,
-            }))}
-          >
-            <Text style={styles.primaryBtnText}>{t('invites.shareLink')}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.outlineBtn, styles.sentBtn]}
-            onPress={() => sentInvite && copy(sentInvite.url)}
-          >
-            <Text style={styles.outlineBtnText}>{t('invites.copyLink')}</Text>
-          </TouchableOpacity>
-        </View>
-      </CenterDialog>
     </View>
   );
 }
@@ -740,6 +787,27 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: borderRadius.lg,
   },
+  settingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  settingTitle: { fontSize: 14, fontWeight: '700', color: colors.text },
+  settingHint: { marginTop: 3, fontSize: 12.5, lineHeight: 18, color: colors.textSecondary },
+  closedCard: {
+    marginHorizontal: spacing.md,
+    marginVertical: spacing.md,
+    padding: spacing.lg,
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.surfaceVariant,
+    borderRadius: borderRadius.lg,
+  },
+  closedTitle: { fontSize: 16, fontWeight: '700', color: colors.text, textAlign: 'center' },
+  closedHint: { fontSize: 13, lineHeight: 19, color: colors.textSecondary, textAlign: 'center' },
   emptyLinkHeader: {
     flexDirection: 'row',
     alignItems: 'center',

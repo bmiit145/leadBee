@@ -37,6 +37,7 @@ export const queryKeys = {
   invites: {
     all: ['invites'] as const,
     link: ['invites', 'link'] as const,
+    settings: ['invites', 'settings'] as const,
     list: (status: string) => ['invites', 'list', status] as const,
     requests: (status: string) => ['invites', 'requests', status] as const,
     pendingCount: ['invites', 'pending-count'] as const,

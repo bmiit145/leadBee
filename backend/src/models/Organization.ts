@@ -74,6 +74,12 @@ export interface IOrganization extends Document {
     lastActivityAt?: Date;
   };
 
+  /** Organization-wide rules for public link/QR joining. */
+  joinSettings: {
+    requireApproval: boolean;
+    allowLinkJoin: boolean;
+  };
+
   trialEndsAt?: Date;
   suspendedAt?: Date;
   suspendedReason?: string;
@@ -151,6 +157,11 @@ const organizationSchema = new Schema<IOrganization>(
       users: { type: Number, default: 0, min: 0 },
       leads: { type: Number, default: 0, min: 0 },
       lastActivityAt: { type: Date },
+    },
+
+    joinSettings: {
+      requireApproval: { type: Boolean, default: true },
+      allowLinkJoin: { type: Boolean, default: true },
     },
 
     trialEndsAt: { type: Date },
