@@ -256,16 +256,23 @@ api.interceptors.response.use(
       } catch (refreshError) {
         processQueue(refreshError as Error, null);
         const refreshStatus = (refreshError as AxiosError).response?.status;
+        const refreshCode = apiErrorCode(refreshError);
+        const organizationInactive =
+          refreshStatus === 403 && refreshCode === 'ORGANIZATION_INACTIVE';
 
         // Only a definitive rejection ends the session. A timeout or a 502 means
         // the network is having a bad moment, and signing the user out of a
         // field app over that is worse than letting them retry.
         const shouldForceLogout =
-          refreshStatus === 400 || refreshStatus === 401 || refreshStatus === 403;
+          refreshStatus === 400 ||
+          refreshStatus === 401 ||
+          (refreshStatus === 403 && !organizationInactive);
 
         if (shouldForceLogout) {
           await storage.clearTokens();
           _forcedLogoutCallback?.();
+        } else if (organizationInactive) {
+          _orgInactiveCallback?.(apiErrorMessage(refreshError, 'This organization is not active.'));
         } else if (__DEV__) {
           console.warn('⚠️ Refresh failed without logout (transient):', refreshStatus);
         }

@@ -111,6 +111,12 @@ Production-specific notes:
   `PLATFORM_JWT_REFRESH_SECRET` — four **distinct** secrets, 32+ chars each.
   The tenant/platform split is a security boundary (`ARCH-3`); reusing one
   value across realms silently collapses it.
+- `JWT_REFRESH_EXPIRES_IN` — mobile tenant and account sessions default to a
+  **90-day idle window**. Refresh tokens rotate on use and are stored in the
+  device Keychain/Keystore; access tokens remain 15 minutes. Logout, password
+  changes and server-side revocation still end sessions. If this variable is
+  already configured on the host, update it to `90d` and restart the backend;
+  changing the code default does not override a host value.
 - `CORS_ORIGINS` — every dashboard origin, comma-separated, absolute `https`,
   no trailing slash. The mobile app needs no entry: native requests send no
   `Origin` header.

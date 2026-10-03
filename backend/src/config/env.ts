@@ -47,7 +47,11 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
   JWT_REFRESH_SECRET: z.string().min(32, 'JWT_REFRESH_SECRET must be at least 32 characters'),
   JWT_EXPIRES_IN: z.string().default('15m'),
-  JWT_REFRESH_EXPIRES_IN: z.string().default('30d'),
+  // Mobile tenant/account sessions use rotating refresh tokens in secure
+  // device storage. A longer idle window avoids repeated password prompts
+  // during normal field work; logout, password changes, and admin revocation
+  // still invalidate the stored token immediately.
+  JWT_REFRESH_EXPIRES_IN: z.string().default('90d'),
 
   PLATFORM_JWT_SECRET: z.string().min(32, 'PLATFORM_JWT_SECRET must be at least 32 characters'),
   PLATFORM_JWT_REFRESH_SECRET: z

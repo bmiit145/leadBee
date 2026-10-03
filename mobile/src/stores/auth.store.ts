@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import { isAxiosError } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Account, User } from '../types';
 import { authService } from '../services/auth.service';
@@ -8,7 +9,7 @@ import { joinService, type JoinResult } from '../services/invite.service';
 import { queryClient } from '../lib/queryClient';
 import { storage, type SessionKind } from '../utils/storage';
 import { systemService, ServerStatus } from '../services/system.service';
-import { setForcedLogoutCallback, setOrgInactiveCallback } from '../services/api';
+import { apiErrorCode, setForcedLogoutCallback, setOrgInactiveCallback } from '../services/api';
 import { Organization } from '../types';
 
 export type ViewMode = 'admin' | 'agent';
@@ -23,6 +24,9 @@ const getEffectivePermissions = (user: User | null): string[] => {
 
 /** A refusal that ends a session, as opposed to the network having a bad moment. */
 const isDefinitive = (status?: number) => status === 400 || status === 401 || status === 403;
+
+const isOrganizationInactiveError = (error: unknown): boolean =>
+  isAxiosError(error) && apiErrorCode(error) === 'ORGANIZATION_INACTIVE';
 
 interface AuthContextType {
   user: User | null;
@@ -181,7 +185,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await storage.setUser(session.user);
       } catch (error: any) {
         const status = error.response?.status;
-        if (isDefinitive(status)) {
+        if (isDefinitive(status) && !isOrganizationInactiveError(error)) {
           try {
             await authService.refresh();
             const session = await authService.getMe();
@@ -189,7 +193,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setOrganization(session.organization);
             await storage.setUser(session.user);
           } catch (refreshError: any) {
-            if (isDefinitive(refreshError?.response?.status)) {
+            if (
+              isDefinitive(refreshError?.response?.status) &&
+              !isOrganizationInactiveError(refreshError)
+            ) {
               setUser(null); setOrganization(null);
               await storage.clearTokens();
             }
@@ -225,9 +232,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const session = await authService.getMe();
       setUser(session.user);
       setOrganization(session.organization);
-    } catch {
-      clearSessionState();
-      await storage.clearTokens();
+    } catch (error: unknown) {
+      // A dropped connection must not turn a valid device session into a
+      // password prompt. Only a definitive server refusal ends the session.
+      const status = isAxiosError(error) ? error.response?.status : undefined;
+      if (isDefinitive(status) && !isOrganizationInactiveError(error)) {
+        clearSessionState();
+        await storage.clearTokens();
+      }
+      throw error;
     } finally {
       setIsLoading(false);
     }
