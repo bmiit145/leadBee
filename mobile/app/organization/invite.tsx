@@ -7,6 +7,7 @@ import {
   StyleSheet,
   ActivityIndicator,
   TextInput,
+  Keyboard,
   Share,
   Linking,
   Platform,
@@ -38,6 +39,7 @@ import { queryKeys } from '../../src/lib/queryKeys';
 import {
   inviteService,
   inviteErrorKey,
+  isUnregisteredAccountError,
   joinUrlFor,
 } from '../../src/services/invite.service';
 import { useAuth } from '../../src/stores/auth.store';
@@ -57,8 +59,8 @@ type QrSaveFeedback =
 /**
  * WhatsApp-style "Group link" invite hub.
  *
- * Provides a direct invite link, QR code, forward to WhatsApp, send via SMS,
- * system share, reset link, direct email invitations and pending join requests.
+ * Provides a direct invite link, QR code, SMS/WhatsApp/system sharing, direct
+ * member addition by email, and pending join-request management.
  */
 export default function InviteMembersScreen() {
   const { t } = useTranslation();
@@ -70,8 +72,10 @@ export default function InviteMembersScreen() {
 
   const [pane, setPane] = useState<Pane>('requests');
   const [email, setEmail] = useState('');
+  const [unregisteredEmail, setUnregisteredEmail] = useState<string | null>(null);
   const [qrOpen, setQrOpen] = useState(false);
   const [qrSavePending, setQrSavePending] = useState(false);
+  const [inviteSharePending, setInviteSharePending] = useState(false);
   const [qrSaveFeedback, setQrSaveFeedback] = useState<QrSaveFeedback>(null);
   const [resetOpen, setResetOpen] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
@@ -132,7 +136,7 @@ export default function InviteMembersScreen() {
   });
 
   const addMemberMutation = useMutation({
-    mutationFn: () => inviteService.addMemberByEmail(email),
+    mutationFn: (submittedEmail: string) => inviteService.addMemberByEmail(submittedEmail),
     onSuccess: (member) => {
       tapFeedback();
       setEmail('');
@@ -142,7 +146,14 @@ export default function InviteMembersScreen() {
         message: t('invites.memberAdded', { name: member.name, organization: organization?.name ?? '' }),
       });
     },
-    onError: fail,
+    onError: (error, submittedEmail) => {
+      if (isUnregisteredAccountError(error)) {
+        Keyboard.dismiss();
+        setUnregisteredEmail(submittedEmail.trim().toLowerCase());
+        return;
+      }
+      fail(error);
+    },
   });
 
   const decideMutation = useMutation({
@@ -232,26 +243,63 @@ export default function InviteMembersScreen() {
     code: link?.code ?? '',
   });
 
-  const forwardWhatsApp = async () => {
-    const url = `whatsapp://send?text=${encodeURIComponent(shareText)}`;
+  const forwardWhatsApp = async (message = shareText) => {
+    const url = `whatsapp://send?text=${encodeURIComponent(message)}`;
     try {
       const supported = await Linking.canOpenURL(url);
       if (supported) {
         await Linking.openURL(url);
       } else {
-        await share(shareText);
+        await share(message);
       }
     } catch {
-      await share(shareText);
+      await share(message);
     }
   };
 
-  const sendSMS = async () => {
-    const url = `sms:?body=${encodeURIComponent(shareText)}`;
+  const sendSMS = async (message = shareText) => {
+    const url = `sms:?body=${encodeURIComponent(message)}`;
     try {
       await Linking.openURL(url);
     } catch {
-      await share(shareText);
+      await share(message);
+    }
+  };
+
+  const shareRegistrationInvite = async (channel: 'system' | 'whatsapp' | 'sms') => {
+    if (inviteSharePending) return;
+
+    setInviteSharePending(true);
+    try {
+      const currentSettings = await settingsQuery.refetch();
+      if (currentSettings.data?.allowLinkJoin !== true) {
+        setUnregisteredEmail(null);
+        setActionFeedback({
+          kind: 'error',
+          message: t('invites.errors.joinClosed'),
+        });
+        return;
+      }
+
+      // Creating a join link is an explicit admin action, and only happens
+      // after the existing policy says link-based joining is enabled.
+      const activeLink = link ?? (await inviteService.issueLink());
+      const url = joinUrlFor(activeLink.code);
+      const message = t('invites.shareMessage', {
+        organization: organization?.name ?? '',
+        url,
+        code: activeLink.code,
+      });
+      setUnregisteredEmail(null);
+      if (!link) void qc.invalidateQueries({ queryKey: queryKeys.invites.all });
+
+      if (channel === 'whatsapp') await forwardWhatsApp(message);
+      else if (channel === 'sms') await sendSMS(message);
+      else await share(message);
+    } catch (error) {
+      fail(error);
+    } finally {
+      setInviteSharePending(false);
     }
   };
 
@@ -430,6 +478,7 @@ export default function InviteMembersScreen() {
             <TextInput
               value={email}
               onChangeText={setEmail}
+              editable={!addMemberMutation.isPending}
               placeholder={t('invites.emailPlaceholder')}
               placeholderTextColor={colors.textSecondary}
               style={styles.emailInput}
@@ -440,7 +489,7 @@ export default function InviteMembersScreen() {
             />
             <TouchableOpacity
               style={[styles.sendBtn, !isValidEmail(email) && styles.sendBtnOff]}
-              onPress={() => addMemberMutation.mutate()}
+              onPress={() => addMemberMutation.mutate(email)}
               disabled={!isValidEmail(email) || addMemberMutation.isPending}
               accessibilityRole="button"
               accessibilityLabel={t('invites.addMember')}
@@ -575,6 +624,62 @@ export default function InviteMembersScreen() {
             <Text style={styles.primaryBtnText}>{t('invites.shareLink')}</Text>
           </TouchableOpacity>
         </View>
+      </CenterDialog>
+
+      <CenterDialog
+        visible={unregisteredEmail !== null}
+        onDismiss={() => setUnregisteredEmail(null)}
+        title={t('invites.unregisteredTitle')}
+        titleVariant="plain"
+      >
+        <Text style={styles.modalMessage}>
+          {t('invites.unregisteredMessage', { email: unregisteredEmail ?? '' })}
+        </Text>
+        {inviteSharePending ? (
+          <ActivityIndicator color={colors.primary} style={styles.loading} />
+        ) : settingsQuery.isLoading ? (
+          <ActivityIndicator color={colors.primary} style={styles.loading} />
+        ) : settingsQuery.isError ? (
+          <EmptyState
+            icon="cloud-offline-outline"
+            title={t('invites.settingsLoadError')}
+            actionLabel={t('common.tryAgain')}
+            onAction={() => void settingsQuery.refetch()}
+          />
+        ) : settingsQuery.data?.allowLinkJoin === true ? (
+          <>
+            <ActionRow
+              icon="share-social-outline"
+              label={t('invites.shareRegistrationInvite')}
+              onPress={() => void shareRegistrationInvite('system')}
+            />
+            <ActionRow
+              icon="logo-whatsapp"
+              label={t('invites.whatsappLink')}
+              onPress={() => void shareRegistrationInvite('whatsapp')}
+            />
+            <ActionRow
+              icon="chatbox-outline"
+              label={t('invites.smsLink')}
+              onPress={() => void shareRegistrationInvite('sms')}
+            />
+          </>
+        ) : (
+          <View style={styles.closedCard}>
+            <Ionicons name="lock-closed-outline" size={23} color={colors.textSecondary} />
+            <Text style={styles.closedTitle}>{t('invites.linkJoinLocked')}</Text>
+            <Text style={styles.closedHint}>{t('invites.linkJoinOffHint')}</Text>
+          </View>
+        )}
+        <TouchableOpacity
+          style={styles.modalCancel}
+          onPress={() => setUnregisteredEmail(null)}
+          disabled={inviteSharePending}
+          accessibilityRole="button"
+          accessibilityLabel={t('common.cancel')}
+        >
+          <Text style={styles.modalCancelText}>{t('common.cancel')}</Text>
+        </TouchableOpacity>
       </CenterDialog>
 
       {/* ─── Reset Link Confirm Dialog ──────────────────────────────────── */}
@@ -983,4 +1088,7 @@ const styles = StyleSheet.create({
   sentTo: { fontSize: 15.5, fontWeight: '700', color: colors.text, textAlign: 'center' },
   sentActions: { flexDirection: 'row', gap: spacing.sm },
   sentBtn: { flex: 1 },
+  modalMessage: { fontSize: 14, color: colors.textSecondary, lineHeight: 21, textAlign: 'center' },
+  modalCancel: { alignSelf: 'center', paddingVertical: spacing.sm, paddingHorizontal: spacing.lg },
+  modalCancelText: { color: colors.primary, fontWeight: '700', fontSize: 15 },
 });

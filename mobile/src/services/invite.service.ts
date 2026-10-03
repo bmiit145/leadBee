@@ -50,6 +50,11 @@ export function inviteErrorKey(error: unknown): string {
   }
 }
 
+/** Lets the add-member flow offer registration when the account is missing. */
+export function isUnregisteredAccountError(error: unknown): boolean {
+  return apiErrorCode(error) === INVITE_ERROR.ACCOUNT_NOT_FOUND;
+}
+
 export function joinUrlFor(code: string): string {
   return `${JOIN_BASE_URL}/${code}`;
 }
